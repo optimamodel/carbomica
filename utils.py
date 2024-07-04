@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pandas as pd
 import atomica as at
+import itertools
 
 def calc_emissions(results, start_year, facility_code, file_name, title=None):
     '''
@@ -143,3 +144,27 @@ def write_alloc_excel(progset, results, year, print_results=True,file_name=None)
         print('Excel file saved: {}'.format(file_name))
     
     return df1, df2
+
+def powerset(set):
+    """
+    Return all combinations of length 0-n
+
+    For example, given the collection [1,2,3] this function would return
+    [],[1],[2],[3],[1,2],[1,3],[2,3],[1,2,3]
+
+    :param set: Iterable of items (set, list)
+    :return: Generator of all combinations
+    """
+    return itertools.chain.from_iterable(itertools.combinations(set, r) for r in range(len(set) + 1))
+
+def is_forbidden_combination(combo, forbidden=None):
+    """
+    Check if a given set of programs contains a subset of programs that is forbidden
+    :param combo: List of programs
+    :param forbidden: List of forbidden program combinations
+    :return: Boolean, True if program list contains a forbidden combination
+    """
+    for f in forbidden:
+        if set(f).issubset(set(combo)):
+            return True
+    return False

@@ -1,6 +1,7 @@
 import atomica as at
 import utils as ut
 import os
+import numpy as np
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
 
@@ -108,3 +109,49 @@ def optimization(P, progset, start_year, facility_code, budgets:list):
     
     # Save budget allocation and interventions coverage (exclude status-quo result)
     ut.write_alloc_excel(progset, results_optimized[1:], start_year,file_name='results/optimization_Budget_Allocation_{}'.format(facility_code))
+
+
+def run_optimization(P, progset, start_year, budgets, baseline_spending=0, forbidden_combos = None):
+    """
+    Optimize spending allocation on interventions by minimizing emissions for a set total budget.
+    Results on emission reductions and optimized budget allocations are saved in an excel sheet.
+    :param P: Atomica project.
+    :param progset: Atomica program set.
+    :param start_year: Start year of simulations.
+    :param budgets: List of budgets to optimize.
+    :param baseline_spending: Baseline spending amount.
+    :param forbidden_combos: Combinations of programs that are mutually exclusive.
+    """
+    for budget in budgets:
+        scenario_results = []
+        scenario_spending = []
+
+        #generate all program combos
+        combos = list(ut.powerset(progset.programs))
+
+        #run status quo sim (redundant?)
+        result_default = P.run_sim(parset='default', result_name='Status-quo') # run status-quo
+        scenario_results.append(result_default)
+        scenario_spending.append(baseline_spending+0)
+
+        #run sims of all allowed program combinations
+        for combo in combos:
+            if ut.is_forbidden_combination(combo):
+                continue
+            coverage = {p: 1 if p in combo else 0 for p in progset.programs}
+            spending = baseline_spending + sum([p.unit_cost.assumption if p.name in combo else 0 for p in progset.programs.values()])
+
+            if spending > budget:
+                continue
+
+            instructions = at.ProgramInstructions(start_year=start_year, coverage=coverage) # define program instructions
+            result = P.run_sim(parset='default', progset=P.progsets[0], progset_instructions=instructions, result_name=''.join(combo)) # run scenario
+
+            scenario_results.append(result)
+            scenario_spending.append(spending)
+
+        #TODO:
+        # calculate emissions
+        # choose result with lowest emissions for each budget
+
+    # save emissions and generate plots
