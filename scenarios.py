@@ -4,6 +4,7 @@ import os
 import tqdm
 import sciris as sc
 import pandas as pd
+import openpyxl
 
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
@@ -154,10 +155,10 @@ def run_all(P, cobenefits, forbidden_combos):
             df_emissions.loc[res.name, par_label] = res.get_variable(par, pop)[0].vals[0]
 
     # Populate the products in use
-    df_programs = pd.DataFrame(index=rows, columns=[p.name for p in programs], dtype=float)
+    df_programs = pd.DataFrame(index=rows, columns=[p.label for p in programs], dtype=float)
     for k, res in results.items():
         for program in programs:
-            df_programs.loc[res.name, program.name] = res.model.program_instructions.alloc[program.name].interpolate(P.settings.sim_start)
+            df_programs.loc[res.name, program.label] = res.model.program_instructions.alloc[program.name].interpolate(P.settings.sim_start)
 
     # Populate costs and co-benefits
     df_costs = pd.DataFrame(index=rows, columns=['Annual cost','Total cost','Cost co-benefits','Other co-benefits'])
@@ -177,8 +178,24 @@ def run_all(P, cobenefits, forbidden_combos):
     # Assemble the final dataframe
     df = pd.concat([df_programs, df_emissions, df_costs], axis=1)
     df.index.name = 'Scenario'
-    writer_emissions = pd.ExcelWriter(f'results/all_scenarios_{pop}.xlsx', engine='xlsxwriter')
-    df.to_excel(writer_emissions, sheet_name=pop)
-    writer_emissions.close()
+    with pd.ExcelWriter(f'results/all_scenarios_{pop}.xlsx', engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name=pop)
+
+        # Get the xlsxwriter workbook and worksheet objects
+        workbook = writer.book
+        worksheet = writer.sheets[pop]
+
+        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+        get_column_letter = lambda x: openpyxl.utils.get_column_letter(df.columns.get_loc(x) + 2)
+
+        for program in programs:
+            col = get_column_letter(program.label)
+            worksheet.set_column(f'{col}:{col}', None, currency_format)
+
+        for cost_col in ['Annual cost','Total cost','Cost co-benefits']:
+            col = get_column_letter(cost_col)
+            worksheet.set_column(f'{col}:{col}', None, currency_format)
+
+
 
     return df
