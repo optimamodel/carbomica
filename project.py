@@ -27,4 +27,17 @@ P.settings.sim_start = start_year # simulation start year
 P.settings.sim_end   = end_year # simulation end year
 
 # Load program and define variables for program runs
-progset = P.load_progbook('books/carbomica_progbook_{}.xlsx'.format(facility_code))
+P.load_progbook('books/carbomica_progbook_{}.xlsx'.format(facility_code))
+
+# Load co-benefits
+cobenefits = pd.read_excel(input_data_sheet, sheet_name='interventions', index_col='Code Name').reindex(['Cost co-benefits','Other co-benefits'], axis=1)
+
+# Load exclusions
+try:
+    exclusions = pd.read_excel(input_data_sheet, sheet_name='exclusions', header=None)
+    exclusions = [{x for x in row if not pd.isna(x)} for _, row in exclusions.iterrows()]
+except ValueError:
+    exclusions = []
+
+# Extract emissions parameters
+emissions_pars = list(pd.read_excel(input_data_sheet, sheet_name='emission sources', index_col='Code Name').index)
