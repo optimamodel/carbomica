@@ -165,6 +165,6 @@ def is_forbidden_combination(combo, forbidden=None):
     :return: Boolean, True if program list contains a forbidden combination
     """
     for f in forbidden:
-        if set(f).issubset(set(combo)):
+        if len(f & set(combo)) > 1:
             return True
     return False
