@@ -64,39 +64,70 @@ def calc_emissions(results, start_year, facility_code, file_name, title=None):
     print(f'Emissions results saved: results/{file_name}.xlsx')
     print(f'Emissions bar plots saved: figs/{file_name}.png')
 
-    
-def plot_allocation(results,file_name):
+
+def plot_allocation(df: pd.DataFrame) -> plt.Figure:
     '''
-    Prints allocation to excel
-    :param results: list of atomica result objects
-    :param file_name: specify excel file name for saving
+    Produces plot of allocation
+
+    :param df: A dataframe where the index is the name of the scenario, and the columns are interventions. If a
+               column called 'Surplus budget' is provided, it will be plotted with a hatched pattern
+    :return: A matplotlib figure
     '''
-    prog_codes = results[0].model.progset.programs
-    prog_labels = [results[0].model.progset.programs[prog].label for prog in prog_codes]
-    res_names = [res.name for res in results]
-    df_spending_optimized = pd.DataFrame(index=res_names, columns=prog_labels)
-    
-    for res in results:
-        for prog_code, prog_name in zip(prog_codes,prog_labels):
-            df_spending_optimized.loc[res.name,prog_name] = res.get_alloc()[prog_code][0]
-    
-    # https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
-    colormap = plt.cm.tab20
-    colors = [colormap(i) for i in range(len(df_spending_optimized.columns))]
-    
-    plt.figure()
-    ax = df_spending_optimized.plot.bar(stacked=True, color=colors, figsize=(15,10), fontsize=22)
-    ax.legend(loc='upper left', bbox_to_anchor=(1.05,1), title='Interventions', fontsize=20, title_fontsize=22)
+
+    # Select colormap
+    # colormap = plt.cm.tab20     # https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
+    # colors = [colormap(i) for i in range(len(df.columns))]
+    colors = sc.gridcolors(df.shape[1])
+
+    fig, ax = plt.subplots()
+    df.iloc[:,::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=22)
+    fig.set_size_inches(len(df)*2.5+6,10)
+
+    # Apply hatched pattern to "Surplus budget" bars
+    for bar, label in zip(ax.patches, df.columns[::-1].repeat(df.shape[0])):
+        if label == "Surplus budget":
+            bar.set_hatch('//')  # Applying hatched pattern
+
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles[::-1], labels[::-1], loc='upper left', bbox_to_anchor=(1.05, 1), title='Interventions', fontsize=20, title_fontsize=22)
+    ax.set_xticklabels([f"${x:,.0f}" for x in df.index], rotation=0)
     ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('${x:,.0f}'))
-    plt.title('Budget allocation', fontsize=25)
-    plt.xticks(rotation=0)
-    plt.tight_layout()
-    plt.savefig('figs/{}.png'.format(file_name))
-    plt.show()
-    plt.close()
-    
-    print('Allocation bar plots saved: figs/{}.png'.format(file_name))
-    
+    ax.set_title('Budget allocation', fontsize=25)
+    ax.set_xlabel(None)
+    fig.tight_layout()
+    return fig
+
+
+def plot_emissions(df: pd.DataFrame, title:str='Total CO2e Emissions') -> plt.Figure:
+    """
+    Plot emissions
+
+    :param df: A dataframe where the index has the name of the scenario, and the columns are names of emissions sources
+    :param title: The title to display on the plot
+    :return: A matplotlib Figure
+    """
+
+    font_size = 22
+    colors = None # sc.gridcolors(df.shape[1]) # Original code had no special colormap
+
+    fig, ax = plt.subplots()
+    df.iloc[:, ::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=font_size)
+
+    plt.title(title, fontsize=font_size + 2)
+
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles[::-1], labels[::-1], title='Emission Sources', bbox_to_anchor=(1.0, 1.0), loc='upper left', fontsize=font_size - 2, title_fontsize=font_size)
+
+    ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('{x:,.0f}'))
+    ax.set_xticklabels([f"${x:,.0f}" if sc.isnumber(x) else x for x in df.index], ha='center', rotation=90)
+    ax.set_xlabel(None)
+    ax.set_ylabel('Emissions (CO2e)', fontsize=font_size)
+
+    fig.set_size_inches(max(15, len(df) * 1.5), 10)
+    fig.tight_layout()
+
+    return fig
+
 
 def write_alloc_excel(progset, results, year, print_results=True,file_name=None):
     """Write optimized budget allocations onto an excel file
