@@ -5,6 +5,7 @@ import tqdm
 import sciris as sc
 import pandas as pd
 import openpyxl
+from collections import defaultdict
 
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
@@ -149,53 +150,91 @@ def run_all(P, cobenefits, forbidden_combos):
 
     # Populate emissions dataframe
     rows = [res.name for res in results.values()]
-    df_emissions = pd.DataFrame(index=rows, columns=par_labels)
+    df_emissions = pd.DataFrame(index=rows) #, columns=par_labels)
     for par, par_label in zip(parameters, par_labels):
         for res in results.values():
             df_emissions.loc[res.name, par_label] = res.get_variable(par, pop)[0].vals[0]
+    df_emissions.columns = pd.MultiIndex.from_product([['Emissions']] + [df_emissions.columns.values])
 
     # Populate the products in use
     df_programs = pd.DataFrame(index=rows, columns=[p.label for p in programs], dtype=float)
     for k, res in results.items():
         for program in programs:
             df_programs.loc[res.name, program.label] = res.model.program_instructions.alloc[program.name].interpolate(P.settings.sim_start)
+    df_programs.columns = pd.MultiIndex.from_product([['Interventions']] + [df_programs.columns.values])
 
     # Populate costs and co-benefits
-    df_costs = pd.DataFrame(index=rows, columns=['Annual cost','Total cost','Cost co-benefits','Other co-benefits'])
+    df_outcomes = pd.DataFrame(index=rows, columns=['Annual cost','Total cost','Cost co-benefits','Other co-benefits'])
     for k, res in results.items():
-        df_costs.loc[res.name, 'Annual cost'] = sum(x.interpolate(P.settings.sim_start)[0] for x in res.model.program_instructions.alloc.values())
-        df_costs.loc[res.name, 'Total cost']  = sum([x.vals[0] for x in at.PlotData.programs(res, t_bins='all').series])
+        df_outcomes.loc[res.name, 'Annual cost'] = sum(x.interpolate(P.settings.sim_start)[0] for x in res.model.program_instructions.alloc.values())
+        df_outcomes.loc[res.name, 'Total cost']  = sum([x.vals[0] for x in at.PlotData.programs(res, t_bins='all').series])
         cost_cobenefit = 0
         other_cobenefits = []
         for program in k:
             cost_cobenefit += cobenefits.at[program, 'Cost co-benefits']
             if not pd.isna(cobenefits.at[program, 'Other co-benefits']):
                 other_cobenefits.append(cobenefits.at[program, 'Other co-benefits'])
-        df_costs.loc[res.name, 'Cost co-benefits'] = cost_cobenefit
-        df_costs.loc[res.name, 'Other co-benefits'] = ', '.join(other_cobenefits)
-
+        df_outcomes.loc[res.name, 'Cost co-benefits'] = cost_cobenefit
+        df_outcomes.loc[res.name, 'Other co-benefits'] = ', '.join(other_cobenefits)
+    df_outcomes.columns = pd.MultiIndex.from_product([['Outcomes']] + [df_outcomes.columns.values])
+    df_outcomes.insert(0, ('Outcomes','Annual CO2'), df_emissions.sum(axis=1))
 
     # Assemble the final dataframe
-    df = pd.concat([df_programs, df_emissions, df_costs], axis=1)
+    df = pd.concat([df_programs, df_emissions, df_outcomes], axis=1)
     df.index.name = 'Scenario'
+    df['Facility'] = pop
+    df = df.set_index('Facility', append=True)
     with pd.ExcelWriter(f'results/all_scenarios_{pop}.xlsx', engine='xlsxwriter') as writer:
-        df.to_excel(writer, sheet_name=pop)
+
+        def format(_):
+            s = df.columns.get_level_values(0)
+            out = []
+            for val in s:
+                if val == 'Interventions':
+                    color = "#fbb4ae"
+                elif val == "Emissions":
+                    color =" #b3cde3"
+                elif val == "Outcomes":
+                    color = "#ccebc5"
+                out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
+            return out
+        x = df.style.apply_index(format, axis="columns")
+        x.to_excel(writer, sheet_name=pop)
 
         # Get the xlsxwriter workbook and worksheet objects
         workbook = writer.book
         worksheet = writer.sheets[pop]
 
+        # Assign currency formats
+        formats = {}
         currency_format = workbook.add_format({'num_format': '$#,##0.00'})
-        get_column_letter = lambda x: openpyxl.utils.get_column_letter(df.columns.get_loc(x) + 2)
 
         for program in programs:
-            col = get_column_letter(program.label)
-            worksheet.set_column(f'{col}:{col}', None, currency_format)
+            formats[df.columns.get_loc(('Interventions',program.label))+df.index.nlevels] = currency_format
+        for cost_col in [('Outcomes','Annual cost'),('Outcomes','Total cost'),('Outcomes','Cost co-benefits')]:
+            formats[df.columns.get_loc(cost_col)+df.index.nlevels] = currency_format
 
-        for cost_col in ['Annual cost','Total cost','Cost co-benefits']:
-            col = get_column_letter(cost_col)
-            worksheet.set_column(f'{col}:{col}', None, currency_format)
+        # Calculate the required column widths
+        widths = defaultdict(int)
+        for i, (a,b) in enumerate(df.columns):
+            widths[i+df.index.nlevels] = max(widths[i+df.index.nlevels], len(a), len(b), df[(a,b)].astype(str).str.len().max())
+        for i in range(df.index.nlevels):
+            widths[i] = df.index.get_level_values(i).astype(str).str.len().max()
 
+        # Set column formats
+        for i, width in widths.items():
+            worksheet.set_column(i, i, width+3, formats.get(i))
 
+        # Freeze pane - nb. this assumes 2 row index columns, update this cell if the number of index levels changes
+        worksheet.freeze_panes('C3')
+
+    # NB. This dataframe can be recreated from the saved file using
+    # `df = pd.read_excel(f'results/all_scenarios_{pop}.xlsx', index_col=[0,1], header=[0,1])`
 
     return df
+
+
+
+
+
+# def optimize(df)
