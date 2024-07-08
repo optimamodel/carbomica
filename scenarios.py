@@ -186,6 +186,56 @@ def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=Tr
 
     return df
 
+
+def save_scenario_outputs(df, facility_code: str, prefix: str):
+    """
+    Save figures and Excel outputs
+
+    :param df: A subset of the rows from `run_all()` with a single index level containing scenario names
+    :param facility_code: The facility code to use
+    :param prefix: Prefix to use for the file (e.g., 'optimization' or 'coverage')
+    :return:
+    """
+    # Allocation outputs
+    alloc = df['Interventions']
+    alloc = alloc.drop('Status-quo')
+
+    # Allocation plot
+    fig = plot_allocation(alloc)
+    file_name = f'figs/{prefix}_Budget_Allocation_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Allocation bar plots saved: {file_name}')
+
+    # Budget spreadsheet
+    file_name = f'results/{prefix}_Budget_Allocation_{facility_code}.xlsx'
+    alloc.T.to_excel(file_name, sheet_name='Budgets')
+    print(f'Allocation spreadsheet saved: {file_name}')
+
+    # Emissions outputs
+    emissions = df['Emissions']
+    emissions.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in emissions.index]
+
+    # Emissions plot
+    fig = plot_emissions(emissions)
+    file_name = f'figs/{prefix}_Emissions_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Emissions bar plots saved: {file_name}')
+
+    # Emissions spreadsheet
+    file_name = f'results/{prefix}_Emissions_{facility_code}.xlsx'
+    emissions.to_excel(file_name, sheet_name=facility_code)
+    print(f'Emissions spreadsheet saved: {file_name}')
+
+    df.index.name='Scenario'
+    df['Facility'] = facility_code
+    df = df.set_index('Facility',append=True)
+    return df
+
+
+
+
 def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
     """
     Find optimal scenarios for each budget level
@@ -233,41 +283,54 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
     df.index = df.index.get_level_values('optimal')
 
     # Allocation outputs
-    alloc = df['Interventions']
-    alloc = alloc.drop('Status-quo')
-    alloc.insert(0, 'Surplus budget', alloc.index.values - alloc.sum(axis=1))
-    alloc.index = [f"${x:,.0f}" for x in alloc.index]
+    df.insert(0, ('Interventions','Surplus budget'),df.index.values[1:] - df['Interventions'][1:].sum(axis=1))
 
-    # Allocation plot
-    fig = plot_allocation(alloc)
-    file_name = f'figs/optimization_Budget_Allocation_{facility_code}.png'
-    fig.savefig(file_name, dpi=300)
-    plt.close(fig)
-    print(f'Allocation bar plots saved: {file_name}')
+    # Save output files
+    save_scenario_outputs(df, facility_code, 'optimization')
 
-    # Budget spreadsheet
-    file_name = f'results/optimization_Budget_Allocation_{facility_code}.xlsx'
-    alloc.T.to_excel(file_name, sheet_name='Budgets')
-    print(f'Allocation spreadsheet saved: {file_name}')
-
-    # Emissions outputs
-    emissions = df['Emissions']
-    emissions.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in emissions.index]
-
-    # Emissions plot
-    fig = plot_emissions(emissions)
-    file_name = f'figs/optimization_Emissions_{facility_code}.png'
-    fig.savefig(file_name, dpi=300)
-    plt.close(fig)
-    print(f'Emissions bar plots saved: {file_name}')
-
-    # Emissions spreadsheet
-    file_name = f'results/optimization_Emissions_{facility_code}.xlsx'
-    emissions.to_excel(file_name, sheet_name=facility_code)
-    print(f'Emissions spreadsheet saved: {file_name}')
-
+    # Prepare final dataframe
+    df = df.drop(('Interventions', 'Surplus budget'), axis=1)
     df.index.name='Scenario'
     df['Facility'] = facility_code
     df = df.set_index('Facility',append=True)
     return df
 
+def coverage_scenario(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Analyse scenarios with each intervention in isolation
+
+    Pass in a dataframe of scenario outputs with the same format as that returned by `run_all()`
+    (it would generally just be the same dataframe produced by this function). A dataframe containing
+    the scenarios with each individual intervention will be returned. Plots and spreadsheets of
+    budget and emissions will also be generated.
+
+    :param df: A dataframe with scenario outcomes (generally from `run_all()`)
+    :param budgets: Maximum spending amounts
+    :return: A dataframe with the same structure as the input, but with scenarios selected and labelled
+             according to the requested budget levels
+    """
+
+    # Extract facility code
+    facility_code = df.index.get_level_values('Facility')[0]
+
+    # Find only scenarios with at most 1 intervention
+    df = df.loc[df.index.get_level_values('Scenario').map(lambda x: sum(y == '1' for y in x))<=1]
+
+    # Get the corresponding intervention and use it to name the scenario
+    scen_names = []
+    for _, row in df.iterrows():
+        match = row['Interventions'].index[row['Interventions']>0]
+        if len(match) == 0:
+            scen_names.append('Status-quo')
+        else:
+            scen_names.append(match[0])
+    df.index = scen_names
+
+    # Save output files
+    save_scenario_outputs(df, facility_code, prefix='coverage_scenario')
+
+    # Prepare final dataframe
+    df.index.name='Scenario'
+    df['Facility'] = facility_code
+    df = df.set_index('Facility',append=True)
+    return df

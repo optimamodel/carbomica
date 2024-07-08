@@ -2,8 +2,8 @@
 Run three main scenarios.
 """
 import numpy as np
-from project import P, start_year, facility_code, cobenefits, exclusions
-from scenarios import coverage_scenario, budget_scenario, run_all, optimize
+from project import P, cobenefits, exclusions
+from scenarios import coverage_scenario, run_all, optimize
 
 # Set random seed
 np.random.seed(20232212) # MODIFY AS NEEDED
@@ -18,6 +18,9 @@ np.random.seed(20232212) # MODIFY AS NEEDED
 # # Run optimization via all scenarios
 df = run_all(P, cobenefits, exclusions)
 
-# Return optimal budgets at various levels
+# # Return optimal budgets at various levels
 budgets = [20e3, 50e3, 100e3, 200e3] # MODIFY AS NEEDED
 optimize(df, budgets)
+
+# Coverage scenarios
+coverage_scenario(df)
