@@ -3,6 +3,7 @@ import matplotlib as mpl
 import pandas as pd
 import atomica as at
 import itertools
+import sciris as sc
 
 def calc_emissions(results, start_year, facility_code, file_name, title=None):
     '''
