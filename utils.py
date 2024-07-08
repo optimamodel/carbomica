@@ -91,7 +91,7 @@ def plot_allocation(df: pd.DataFrame) -> plt.Figure:
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], labels[::-1], loc='upper left', bbox_to_anchor=(1.05, 1), title='Interventions', fontsize=20, title_fontsize=22)
-    ax.set_xticklabels([f"${x:,.0f}" for x in df.index], rotation=0)
+    ax.set_xticklabels(df.index, rotation=0)
     ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('${x:,.0f}'))
     ax.set_title('Budget allocation', fontsize=25)
     ax.set_xlabel(None)
@@ -120,7 +120,7 @@ def plot_emissions(df: pd.DataFrame, title:str='Total CO2e Emissions') -> plt.Fi
     ax.legend(handles[::-1], labels[::-1], title='Emission Sources', bbox_to_anchor=(1.0, 1.0), loc='upper left', fontsize=font_size - 2, title_fontsize=font_size)
 
     ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('{x:,.0f}'))
-    ax.set_xticklabels([f"${x:,.0f}" if sc.isnumber(x) else x for x in df.index], ha='center', rotation=90)
+    ax.set_xticklabels(df.index, ha='center', rotation=90)
     ax.set_xlabel(None)
     ax.set_ylabel('Emissions (CO2e)', fontsize=font_size)
 

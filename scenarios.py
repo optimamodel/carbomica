@@ -2,10 +2,11 @@ import atomica as at
 import utils as ut
 import os
 import tqdm
+from collections import defaultdict
 import sciris as sc
 import pandas as pd
-import openpyxl
-from collections import defaultdict
+import matplotlib.pyplot as plt
+from utils import plot_emissions, plot_allocation
 
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
@@ -55,68 +56,6 @@ def budget_scenario(P, start_year, facility_code, spending:int):
         
     # Calculate emissions 
     ut.calc_emissions(results_scenario,start_year,facility_code,file_name='budget_scenario_Emissions_{}'.format(facility_code),title='CO2e emissions - fixed budget (${:0,.0f})'.format(spending))
-
-def optimization(P, start_year, facility_code, budgets:list):
-    '''
-    Optimize spending allocation on interventions by minizing emissions for a set total budget.
-    Results on emission reductions and optimized budget allocations are saved in an excel sheet.
-    :param P: Atomica project.
-    :param start_year: Start year of simulations.
-    :param facility_code: Code of the facility.
-    :param budgets: List of budgets to optimize.
-    :return: 
-    '''
-    progset = P.progsets[0]
-    instructions = at.ProgramInstructions(alloc=P.progsets[0], start_year=start_year) # Baseline spending
-    adjustments = [at.SpendingAdjustment(prog, start_year, 'abs', 0.0, 10e6) for prog in progset.programs] # Adjustments (no spending constraint on any intervention)
-    measurables = [at.MinimizeMeasurable('co2e_emissions',start_year)] # Measurables (objective function: minimize total emissions)
-    
-    # Run optimization
-    # Initialize with PSO
-    result_names = []
-    for budget in budgets:
-        result_names.append('${:0,.0f}'.format(budget))
-        
-    results_optimized = []
-    for budget, name in zip(budgets, result_names):
-        constraints = at.TotalSpendConstraint(total_spend=budget, t=start_year) # constraint on total spending
-        # Run optimization
-        optimization = at.Optimization(name='default', method='pso', 
-                                       adjustments=adjustments, measurables=measurables, constraints=constraints)
-        optimized_instructions = at.optimize(P, optimization, P.parsets[0],P.progsets[0], instructions=instructions, optim_args={"maxiter": 10})
-        result_optimized = P.run_sim(P.parsets[0],P.progsets[0], progset_instructions=optimized_instructions)
-        
-        # Compile results
-        result_optimized.name = name
-        results_optimized.append(result_optimized)
-    
-    # Extract spending to use as initial conditions in ASD loop
-    allocation_initial, _ = ut.write_alloc_excel(progset, results_optimized, start_year, print_results=False)
-    
-    # Refine optimization with ASD
-    results_optimized = [P.run_sim(parset='default',result_name='Status-quo')]
-    for budget, name in zip(budgets, result_names):
-        constraints = at.TotalSpendConstraint(total_spend=budget, t=start_year) # constraint on total spending
-        adjustments = [at.SpendingAdjustment(prog, start_year, initial=allocation_initial[name][progset.programs[prog].label]) for prog in progset.programs.keys()]
-        
-        # Run optimization
-        optimization = at.Optimization(name='default', method='asd', 
-                                       adjustments=adjustments, measurables=measurables, constraints=constraints)
-        optimized_instructions = at.optimize(P, optimization, P.parsets[0],P.progsets[0], instructions=instructions)
-        result_optimized = P.run_sim(P.parsets[0],P.progsets[0], progset_instructions=optimized_instructions)
-        
-        # Compile results
-        result_optimized.name = name
-        results_optimized.append(result_optimized)
-        
-    # Plot and save emissions
-    ut.calc_emissions(results_optimized,start_year,facility_code,file_name='optimization_Emissions_{}'.format(facility_code))
-    
-    # Plot budget allocation (exclude status-quo result)
-    ut.plot_allocation(results_optimized[1:],file_name='optimization_Budget_Allocation_{}'.format(facility_code)) # allocation
-    
-    # Save budget allocation and interventions coverage (exclude status-quo result)
-    ut.write_alloc_excel(progset, results_optimized[1:], start_year,file_name='results/optimization_Budget_Allocation_{}'.format(facility_code))
 
 def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=True) -> pd.DataFrame:
 
@@ -247,8 +186,88 @@ def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=Tr
 
     return df
 
+def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
+    """
+    Find optimal scenarios for each budget level
+
+    Pass in a dataframe of scenario outputs with the same format as that returned by `run_all()`
+    (it would generally just be the same dataframe produced by this function). Pass in a list
+    of budgets with maximum spending amounts. Optimal scenarios for each budget level will be
+    identified. Plots and spreadsheets of budgets and emissions will be saved to the `figs` and
+    `results` directories, respectively. A dataframe containing the optimal scenarios associated
+    with each budget level will be returned (the index will be the budget levels, and a 'Status-quo'
+    entry, rather than the original scenario name).
+
+    For each budget level, the scenario with the least Annual CO2 emissions and spending less than
+    the budget will be identified. If multiple scenarios have the same CO2, the ones with the smallest
+    budget will be selected. If multiple scenarios have the same CO2 and cost, pick the one with the
+    largest cost co-benefit. In the event that multiple scenarios have the same optimal CO2 level, cost,
+    and cost co-benefit, there are intended to be multiple bars for that scenario (i.e., duplicate index
+    entries and axis labels). However, this functionality has not been tested as such as scenario has not
+    yet been observed.
+
+    :param df: A dataframe with scenario outcomes (generally from `run_all()`)
+    :param budgets: Maximum spending amounts
+    :return: A dataframe with the same structure as the input, but with scenarios selected and labelled
+             according to the requested budget levels
+    """
+
+    facility_code = df.index.get_level_values('Facility')[0]
+    dfs = []
+
+    df2 = df.loc[df[('Outcomes', 'Total cost')] == 0]
+    df2['optimal'] = 'Status-quo'
+    dfs.append(df2)
+
+    for budget in budgets:
+        df2 = df.loc[df[('Outcomes', 'Annual cost')] <= budget]
+        df2 = df2.loc[df2[('Outcomes', 'Annual CO2')] == df2[('Outcomes', 'Annual CO2')].min()]
+        df2 = df2.loc[df2[('Outcomes', 'Annual cost')] == df2[('Outcomes', 'Annual cost')].min()]
+        df2 = df2.loc[df2[('Outcomes', 'Cost co-benefits')] == df2[('Outcomes', 'Cost co-benefits')].max()]
+        df2['optimal'] = budget
+        dfs.append(df2)
 
 
+    df = pd.concat(dfs).set_index('optimal', append=True)
+    facility = df.index.get_level_values('Facility')[0]
+    df.index = df.index.get_level_values('optimal')
 
+    # Allocation outputs
+    alloc = df['Interventions']
+    alloc = alloc.drop('Status-quo')
+    alloc.insert(0, 'Surplus budget', alloc.index.values - alloc.sum(axis=1))
+    alloc.index = [f"${x:,.0f}" for x in alloc.index]
 
-# def optimize(df)
+    # Allocation plot
+    fig = plot_allocation(alloc)
+    file_name = f'figs/optimization_Budget_Allocation_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Allocation bar plots saved: {file_name}')
+
+    # Budget spreadsheet
+    file_name = f'results/optimization_Budget_Allocation_{facility_code}.xlsx'
+    alloc.T.to_excel(file_name, sheet_name='Budgets')
+    print(f'Allocation spreadsheet saved: {file_name}')
+
+    # Emissions outputs
+    emissions = df['Emissions']
+    emissions.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in emissions.index]
+
+    # Emissions plot
+    fig = plot_emissions(emissions)
+    file_name = f'figs/optimization_Emissions_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Emissions bar plots saved: {file_name}')
+
+    # Emissions spreadsheet
+    file_name = f'results/optimization_Emissions_{facility_code}.xlsx'
+    emissions.to_excel(file_name, sheet_name=facility_code)
+    print(f'Emissions spreadsheet saved: {file_name}')
+
+    df.index.name='Scenario'
+    df['Facility'] = facility_code
+    df = df.set_index('Facility',append=True)
+    return df
+
