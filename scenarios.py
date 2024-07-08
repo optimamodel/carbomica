@@ -118,16 +118,27 @@ def optimization(P, start_year, facility_code, budgets:list):
     # Save budget allocation and interventions coverage (exclude status-quo result)
     ut.write_alloc_excel(progset, results_optimized[1:], start_year,file_name='results/optimization_Budget_Allocation_{}'.format(facility_code))
 
-def run_all(P, cobenefits, forbidden_combos):
+def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=True) -> pd.DataFrame:
+
     """
-    Optimize spending allocation on interventions by minimizing emissions for a set total budget.
-    Results on emission reductions and optimized budget allocations are saved in an excel sheet.
-    :param P: Atomica project.
+    Run all allowed combinations of interventions
+
+    This function produces a dataframe with rows for every allowed combination of interventions,
+    with columns for
+        - Annual spending by intervention
+        - Annual emissions by source
+        - Outcomes for annual emissions, annual cost, total cost, and co-benefits
+
+    By default, saves outputs into the `results` folder, although this can be optionally skipped.
+
+    :param P: Atomica project. The first program set (`P.progsets[0]`) will be used automatically. The start year
+              is drawn from the project settings. The facility code is drawn from the population name in the project data
+
     :param progset: Atomica program set.
     :param start_year: Start year of simulations.
-    :param budgets: List of budgets to optimize.
-    :param baseline_spending: Baseline spending amount.
-    :param forbidden_combos: Combinations of programs that are mutually exclusive.
+    :param forbidden_combos: Optionally specify list of sets of interventions that are mutually exclusive. Only one item from each set may be present in the scenario
+    :param save: Optionally save result to `results/all_scenarios_{facility_code}.xlsx` (default: True)
+    :return: A dataframe with the simulation outputs
     """
 
     #generate all program combos
@@ -143,9 +154,8 @@ def run_all(P, cobenefits, forbidden_combos):
             results[combo] = P.run_sim(parset='default', progset=P.progsets[0], progset_instructions=instructions, result_name='S'+''.join(['1' if p.name in combo else '0' for p in programs]))  # run scenario
 
     # Calculate emissions/costs and output dataframe
-    pop = results[0].pop_names[0]
-    pars = results[0].par_names(pop)
-    parameters = [par for par in pars if '_mult' not in par and '_emissions' not in par and '_baseline' not in par]
+    facility_code = results[0].pop_names[0]
+    parameters = [par for par in P.framework.pars.index if '_mult' not in par and '_emissions' not in par and '_baseline' not in par]
     par_labels = [par.replace('_', ' ').title() for par in parameters]
 
     # Populate emissions dataframe
@@ -153,7 +163,7 @@ def run_all(P, cobenefits, forbidden_combos):
     df_emissions = pd.DataFrame(index=rows) #, columns=par_labels)
     for par, par_label in zip(parameters, par_labels):
         for res in results.values():
-            df_emissions.loc[res.name, par_label] = res.get_variable(par, pop)[0].vals[0]
+            df_emissions.loc[res.name, par_label] = res.get_variable(par, facility_code)[0].vals[0]
     df_emissions.columns = pd.MultiIndex.from_product([['Emissions']] + [df_emissions.columns.values])
 
     # Populate the products in use
@@ -182,54 +192,58 @@ def run_all(P, cobenefits, forbidden_combos):
     # Assemble the final dataframe
     df = pd.concat([df_programs, df_emissions, df_outcomes], axis=1)
     df.index.name = 'Scenario'
-    df['Facility'] = pop
+    df['Facility'] = facility_code
     df = df.set_index('Facility', append=True)
-    with pd.ExcelWriter(f'results/all_scenarios_{pop}.xlsx', engine='xlsxwriter') as writer:
 
-        def format(_):
-            s = df.columns.get_level_values(0)
-            out = []
-            for val in s:
-                if val == 'Interventions':
-                    color = "#fbb4ae"
-                elif val == "Emissions":
-                    color =" #b3cde3"
-                elif val == "Outcomes":
-                    color = "#ccebc5"
-                out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
-            return out
-        x = df.style.apply_index(format, axis="columns")
-        x.to_excel(writer, sheet_name=pop)
+    if save:
+        with pd.ExcelWriter(f'results/all_scenarios_{facility_code}.xlsx', engine='xlsxwriter') as writer:
+            # Apply header colors
+            def format(_):
+                s = df.columns.get_level_values(0)
+                out = []
+                for val in s:
+                    if val == 'Interventions':
+                        color = "#fbb4ae"
+                    elif val == "Emissions":
+                        color =" #b3cde3"
+                    elif val == "Outcomes":
+                        color = "#ccebc5"
+                    out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
+                return out
 
-        # Get the xlsxwriter workbook and worksheet objects
-        workbook = writer.book
-        worksheet = writer.sheets[pop]
+            # Write the styled dataframe
+            x = df.style.apply_index(format, axis="columns")
+            x.to_excel(writer, sheet_name=facility_code)
 
-        # Assign currency formats
-        formats = {}
-        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+            # Get the xlsxwriter workbook and worksheet objects
+            workbook = writer.book
+            worksheet = writer.sheets[facility_code]
 
-        for program in programs:
-            formats[df.columns.get_loc(('Interventions',program.label))+df.index.nlevels] = currency_format
-        for cost_col in [('Outcomes','Annual cost'),('Outcomes','Total cost'),('Outcomes','Cost co-benefits')]:
-            formats[df.columns.get_loc(cost_col)+df.index.nlevels] = currency_format
+            # Determine currency formats
+            formats = {}
+            currency_format = workbook.add_format({'num_format': '$#,##0.00'})
 
-        # Calculate the required column widths
-        widths = defaultdict(int)
-        for i, (a,b) in enumerate(df.columns):
-            widths[i+df.index.nlevels] = max(widths[i+df.index.nlevels], len(a), len(b), df[(a,b)].astype(str).str.len().max())
-        for i in range(df.index.nlevels):
-            widths[i] = df.index.get_level_values(i).astype(str).str.len().max()
+            for program in programs:
+                formats[df.columns.get_loc(('Interventions',program.label))+df.index.nlevels] = currency_format
+            for cost_col in [('Outcomes','Annual cost'),('Outcomes','Total cost'),('Outcomes','Cost co-benefits')]:
+                formats[df.columns.get_loc(cost_col)+df.index.nlevels] = currency_format
 
-        # Set column formats
-        for i, width in widths.items():
-            worksheet.set_column(i, i, width+3, formats.get(i))
+            # Determine required column widths
+            widths = defaultdict(int)
+            for i, (a,b) in enumerate(df.columns):
+                widths[i+df.index.nlevels] = max(widths[i+df.index.nlevels], len(a), len(b), df[(a,b)].astype(str).str.len().max())
+            for i in range(df.index.nlevels):
+                widths[i] = df.index.get_level_values(i).astype(str).str.len().max()
 
-        # Freeze pane - nb. this assumes 2 row index columns, update this cell if the number of index levels changes
-        worksheet.freeze_panes('C3')
+            # Set column formats (both width and cell format)
+            for i, width in widths.items():
+                worksheet.set_column(i, i, width+3, formats.get(i))
 
-    # NB. This dataframe can be recreated from the saved file using
-    # `df = pd.read_excel(f'results/all_scenarios_{pop}.xlsx', index_col=[0,1], header=[0,1])`
+            # Freeze pane - nb. this assumes 2 row index columns, update this cell if the number of index levels changes
+            worksheet.freeze_panes('C3')
+
+            # NB. The dataframe can be recreated if needed from the saved file using
+            # `df = pd.read_excel(f'results/all_scenarios_{pop}.xlsx', index_col=[0,1], header=[0,1])`
 
     return df
 
