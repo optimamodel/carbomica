@@ -4,9 +4,10 @@ import pandas as pd
 import atomica as at
 import itertools
 import sciris as sc
-from project import cobenefits, emissions_pars
+from project import cobenefits, emissions_pars, facility_code
+from collections import defaultdict
 
-def calc_emissions(results):
+def calc_emissions(results: list) -> pd.DataFrame:
     '''
     Calculate all simulation outputs (emissions and costs)
 
@@ -63,6 +64,57 @@ def calc_emissions(results):
     df = df.set_index('Facility', append=True)
 
     return df
+
+
+def save_formatted_results(df, file_name):
+    with pd.ExcelWriter(file_name, engine='xlsxwriter') as writer:
+        # Apply header colors
+        def format(_):
+            s = df.columns.get_level_values(0)
+            out = []
+            for val in s:
+                if val == 'Interventions':
+                    color = "#fbb4ae"
+                elif val == "Emissions":
+                    color = " #b3cde3"
+                elif val == "Outcomes":
+                    color = "#ccebc5"
+                out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
+            return out
+
+        # Write the styled dataframe
+        x = df.style.apply_index(format, axis="columns")
+        x.to_excel(writer)
+
+        # Get the xlsxwriter workbook and worksheet objects
+        workbook = writer.book
+        worksheet = workbook.worksheets()[0]
+
+        # Determine currency formats
+        formats = {}
+        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+
+        for program in df['Interventions'].columns:
+            formats[df.columns.get_loc(('Interventions', program)) + df.index.nlevels] = currency_format
+        for cost_col in [('Outcomes', 'Annual cost'), ('Outcomes', 'Total cost'), ('Outcomes', 'Cost co-benefits')]:
+            formats[df.columns.get_loc(cost_col) + df.index.nlevels] = currency_format
+
+        # Determine required column widths
+        widths = defaultdict(int)
+        for i, (a, b) in enumerate(df.columns):
+            widths[i + df.index.nlevels] = max(widths[i + df.index.nlevels], len(a), len(b), df[(a, b)].astype(str).str.len().max())
+        for i in range(df.index.nlevels):
+            widths[i] = df.index.get_level_values(i).astype(str).str.len().max()
+
+        # Set column formats (both width and cell format)
+        for i, width in widths.items():
+            worksheet.set_column(i, i, width + 3, formats.get(i))
+
+        # Freeze pane - nb. this assumes 2 row index columns, update this cell if the number of index levels changes
+        worksheet.freeze_panes('C3')
+
+        # NB. The dataframe can be recreated if needed from the saved file using
+        # `df = pd.read_excel(f'results/all_scenarios_{pop}.xlsx', index_col=[0,1], header=[0,1])`
 
 
 def plot_allocation(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
@@ -128,6 +180,54 @@ def plot_emissions(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     fig.tight_layout()
 
     return fig
+
+
+def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
+    """
+    Save all figures and Excel outputs associated with a scenario
+
+    :param df: A subset of the rows from `run_all()` with a single index level containing scenario names
+    :param prefix: Prefix to use for the file (e.g., 'optimization' or 'coverage')
+    :param title_suffix: Optional string to append to the plot titles
+    :return:
+    """
+
+    # Allocation outputs
+    alloc = df['Interventions']
+    alloc = alloc.drop('Status-quo')
+
+    # Allocation plot
+    fig = plot_allocation(alloc, title_suffix)
+    file_name = f'figs/{prefix}_Budget_Allocation_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Allocation bar plots saved: {file_name}')
+
+    # Budget spreadsheet
+    file_name = f'results/{prefix}_Budget_Allocation_{facility_code}.xlsx'
+    alloc.T.to_excel(file_name, sheet_name='Budgets')
+    print(f'Allocation spreadsheet saved: {file_name}')
+
+    # Emissions outputs
+    emissions = df['Emissions']
+
+    # Emissions plot
+    fig = plot_emissions(emissions, title_suffix)
+    file_name = f'figs/{prefix}_Emissions_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Emissions bar plots saved: {file_name}')
+
+    # Emissions spreadsheet
+    file_name = f'results/{prefix}_Emissions_{facility_code}.xlsx'
+    emissions.to_excel(file_name, sheet_name=facility_code)
+    print(f'Emissions spreadsheet saved: {file_name}')
+
+    df.index.name='Scenario'
+    df['Facility'] = facility_code
+    df = df.set_index('Facility',append=True)
+    save_formatted_results(df, f'results/{prefix}_{facility_code}.xlsx')
+    return df
 
 
 def powerset(set):

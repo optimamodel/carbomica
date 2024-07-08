@@ -2,11 +2,9 @@ import atomica as at
 import utils as ut
 import os
 import tqdm
-from collections import defaultdict
 import sciris as sc
 import pandas as pd
-import matplotlib.pyplot as plt
-from utils import plot_emissions, plot_allocation
+from utils import save_scenario_outputs
 from project import facility_code, exclusions
 
 if not os.path.exists('results'): os.makedirs('results')
@@ -40,7 +38,7 @@ def budget_scenario(P: at.Project, spending:int) -> pd.DataFrame:
 
     df_plot = df.copy()
     df_plot.index = df_plot.index.droplevel(1)
-    save_scenario_outputs(df_plot, f'budget_scenario_{int(spending)}',title_suffix=f'fixed budget (${spending:,.0f})')
+    df = save_scenario_outputs(df_plot, f'budget_scenario_{int(spending)}',title_suffix=f'fixed budget (${spending:,.0f})')
 
     return df
 
@@ -67,120 +65,23 @@ def run_all(P: at.Project, save:bool=True) -> pd.DataFrame:
     """
 
     #generate all program combos
-    combos = [combo for combo in ut.powerset(P.progsets[0].programs) if not ut.is_forbidden_combination(combo, exclusions)]
+    programs = P.progsets[0].programs
+    combos = [combo for combo in ut.powerset(programs) if not ut.is_forbidden_combination(combo, exclusions)]
 
     #run sims of all allowed program combinations
     results = sc.odict()
-    programs = P.progsets[0].programs.values()
     with at.Quiet():
         for combo in tqdm.tqdm(combos):
-            alloc = {p.name: p.unit_cost.assumption if p.name in combo else 0 for p in programs}
+            alloc = {p.name: p.unit_cost.assumption if p.name in combo else 0 for p in programs.values()}
             instructions = at.ProgramInstructions(start_year=P.settings.sim_start, alloc=alloc) # define program instructions
-            results[combo] = P.run_sim(parset='default', progset=P.progsets[0], progset_instructions=instructions, result_name='S'+''.join(['1' if p.name in combo else '0' for p in programs]))  # run scenario
+            results[combo] = P.run_sim(parset='default', progset=P.progsets[0], progset_instructions=instructions, result_name='S'+''.join(['1' if p in combo else '0' for p in programs]))  # run scenario
 
     df = ut.calc_emissions(list(results.values()))
 
     if save:
-        with pd.ExcelWriter(f'results/all_scenarios_{facility_code}.xlsx', engine='xlsxwriter') as writer:
-            # Apply header colors
-            def format(_):
-                s = df.columns.get_level_values(0)
-                out = []
-                for val in s:
-                    if val == 'Interventions':
-                        color = "#fbb4ae"
-                    elif val == "Emissions":
-                        color =" #b3cde3"
-                    elif val == "Outcomes":
-                        color = "#ccebc5"
-                    out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
-                return out
-
-            # Write the styled dataframe
-            x = df.style.apply_index(format, axis="columns")
-            x.to_excel(writer, sheet_name=facility_code)
-
-            # Get the xlsxwriter workbook and worksheet objects
-            workbook = writer.book
-            worksheet = writer.sheets[facility_code]
-
-            # Determine currency formats
-            formats = {}
-            currency_format = workbook.add_format({'num_format': '$#,##0.00'})
-
-            for program in programs:
-                formats[df.columns.get_loc(('Interventions',program.label))+df.index.nlevels] = currency_format
-            for cost_col in [('Outcomes','Annual cost'),('Outcomes','Total cost'),('Outcomes','Cost co-benefits')]:
-                formats[df.columns.get_loc(cost_col)+df.index.nlevels] = currency_format
-
-            # Determine required column widths
-            widths = defaultdict(int)
-            for i, (a,b) in enumerate(df.columns):
-                widths[i+df.index.nlevels] = max(widths[i+df.index.nlevels], len(a), len(b), df[(a,b)].astype(str).str.len().max())
-            for i in range(df.index.nlevels):
-                widths[i] = df.index.get_level_values(i).astype(str).str.len().max()
-
-            # Set column formats (both width and cell format)
-            for i, width in widths.items():
-                worksheet.set_column(i, i, width+3, formats.get(i))
-
-            # Freeze pane - nb. this assumes 2 row index columns, update this cell if the number of index levels changes
-            worksheet.freeze_panes('C3')
-
-            # NB. The dataframe can be recreated if needed from the saved file using
-            # `df = pd.read_excel(f'results/all_scenarios_{pop}.xlsx', index_col=[0,1], header=[0,1])`
+        ut.save_formatted_results(df, f'results/all_scenarios_{facility_code}.xlsx')
 
     return df
-
-
-def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
-    """
-    Save figures and Excel outputs
-
-    :param df: A subset of the rows from `run_all()` with a single index level containing scenario names
-    :param prefix: Prefix to use for the file (e.g., 'optimization' or 'coverage')
-    :param title_suffix: Optional string to append to the plot titles
-    :return:
-    """
-    # Allocation outputs
-    alloc = df['Interventions']
-    alloc = alloc.drop('Status-quo')
-    alloc.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in alloc.index]
-
-    # Allocation plot
-    fig = plot_allocation(alloc, title_suffix)
-    file_name = f'figs/{prefix}_Budget_Allocation_{facility_code}.png'
-    fig.savefig(file_name, dpi=300)
-    plt.close(fig)
-    print(f'Allocation bar plots saved: {file_name}')
-
-    # Budget spreadsheet
-    file_name = f'results/{prefix}_Budget_Allocation_{facility_code}.xlsx'
-    alloc.T.to_excel(file_name, sheet_name='Budgets')
-    print(f'Allocation spreadsheet saved: {file_name}')
-
-    # Emissions outputs
-    emissions = df['Emissions']
-    emissions.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in emissions.index]
-
-    # Emissions plot
-    fig = plot_emissions(emissions, title_suffix)
-    file_name = f'figs/{prefix}_Emissions_{facility_code}.png'
-    fig.savefig(file_name, dpi=300)
-    plt.close(fig)
-    print(f'Emissions bar plots saved: {file_name}')
-
-    # Emissions spreadsheet
-    file_name = f'results/{prefix}_Emissions_{facility_code}.xlsx'
-    emissions.to_excel(file_name, sheet_name=facility_code)
-    print(f'Emissions spreadsheet saved: {file_name}')
-
-    df.index.name='Scenario'
-    df['Facility'] = facility_code
-    df = df.set_index('Facility',append=True)
-    return df
-
-
 
 
 def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
@@ -206,7 +107,8 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
     :param df: A dataframe with scenario outcomes (generally from `run_all()`)
     :param budgets: Maximum spending amounts
     :return: A dataframe with the same structure as the input, but with scenarios selected and labelled
-             according to the requested budget levels
+             according to the requested budget levels. An additional intervention will be added called
+             'Surplus budget' containing any unspent funds associated with each scenario.
     """
 
     dfs = []
@@ -222,24 +124,20 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
         df2 = df2.loc[df2[('Outcomes', 'Cost co-benefits')] == df2[('Outcomes', 'Cost co-benefits')].max()]
         df2['optimal'] = budget
         dfs.append(df2)
-
-
     df = pd.concat(dfs).set_index('optimal', append=True)
-    facility = df.index.get_level_values('Facility')[0]
     df.index = df.index.get_level_values('optimal')
 
     # Allocation outputs
     df.insert(0, ('Interventions','Surplus budget'),df.index.values[1:] - df['Interventions'][1:].sum(axis=1))
 
-    # Save output files
-    save_scenario_outputs(df, 'optimization')
+    # Rename the scenarios with proper formatting
+    df.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in df.index.get_level_values(0)]
 
-    # Prepare final dataframe
-    df = df.drop(('Interventions', 'Surplus budget'), axis=1)
-    df.index.name='Scenario'
-    df['Facility'] = facility_code
-    df = df.set_index('Facility',append=True)
+    # Save output files
+    df = save_scenario_outputs(df, 'optimization')
+
     return df
+
 
 def coverage_scenario(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -269,11 +167,7 @@ def coverage_scenario(df: pd.DataFrame) -> pd.DataFrame:
             scen_names.append(match[0])
     df.index = scen_names
 
-    # Save output files
-    save_scenario_outputs(df, 'coverage_scenario')
+    # Save outputs
+    df = save_scenario_outputs(df, 'coverage_scenario')
 
-    # Prepare final dataframe
-    df.index.name='Scenario'
-    df['Facility'] = facility_code
-    df = df.set_index('Facility',append=True)
     return df
