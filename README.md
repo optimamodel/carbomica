@@ -18,7 +18,7 @@ Script to run the three main scenarios:
 - `budget_scenario`: Run a scenario where spending on individual interventions is specified.
 - `optimization`: Optimize spending allocation on all interventions by minizing emissions for a set total budget.
 
-### `run_program_checks.py`
+### `program_checks.py`
 Script to check output of programs under certain coverage and budget conditions.
 
 ## Non-Modifiable scripts
