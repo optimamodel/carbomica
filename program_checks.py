@@ -1,5 +1,5 @@
 import atomica as at
-from project import P, progset, start_year
+from project import P, start_year
 import os
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
