@@ -4,74 +4,74 @@ import pandas as pd
 import atomica as at
 import itertools
 import sciris as sc
+from project import cobenefits, emissions_pars
 
-def calc_emissions(results, start_year, facility_code, file_name, title=None):
+def calc_emissions(results):
     '''
-    Calculate emissions before and after program implementation, export results to Excel, and generate bar plots.
+    Calculate all simulation outputs (emissions and costs)
+
     :param results: list of Atomica result objects.
-    :param start_year: Start year of simulations.
-    :param facility_code: Code of the facility.
-    :param file_name: Specify Excel file name for saving.
-    :param title: Title for the plot.
-    :return: DataFrame of emissions results.
     '''
-    # Extract relevant parameter names for plotting
-    pop = results[0].pop_names[0]
-    pars = results[0].par_names(pop)
-    parameters = [par for par in pars if '_mult' not in par and '_emissions' not in par and '_baseline' not in par]
-    par_labels = [par.replace('_', ' ').title() for par in parameters]
-    
-    # Set up DataFrame for emissions
+
+    programs = results[0].model.progset.programs.values()
+    facility_code = results[0].pop_names[0]
+    start_year = results[0].t[0]
+
+    # Calculate emissions/costs and output dataframe
+    par_labels = [par.replace('_', ' ').title() for par in emissions_pars]
+
+
+    # Populate emissions dataframe
     rows = [res.name for res in results]
-    df_emissions = pd.DataFrame(index=rows, columns=par_labels)
-    start_i = list(results[0].t).index(start_year)
-    
-    # Populate the DataFrame with emissions data
-    for par, par_label in zip(parameters, par_labels):
+    df_emissions = pd.DataFrame(index=rows) #, columns=par_labels)
+    for par, par_label in zip(emissions_pars, par_labels):
         for res in results:
-            df_emissions.loc[res.name, par_label] = res.get_variable(par, facility_code)[0].vals[start_i]
-    
-    # Export the DataFrame to Excel
-    writer_emissions = pd.ExcelWriter(f'results/{file_name}.xlsx', engine='xlsxwriter')
-    df_emissions.to_excel(writer_emissions, sheet_name=facility_code)
-    
-    # Generate the bar plot
-    fig_width = max(15, len(par_labels) * 1.5)
-    fig_height = 10
-    font_size = 22
-    ax = df_emissions.plot(figsize=(fig_width, fig_height), kind='bar', stacked=True, fontsize=font_size)
-    
-    # Set plot title
-    plt.title(title or 'Total CO2e Emissions', fontsize=font_size + 2)
-    
-    # Adjust legend
-    ax.legend(title='Emission Sources', bbox_to_anchor=(1.0, 1.0), loc='upper left', fontsize=font_size-2, title_fontsize=font_size)
-    
-    # Format the y-axis
-    ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('{x:,.0f}'))
-    
-    # Adjust x-axis labels
-    plt.xticks(rotation=90, ha='center')
-    plt.ylabel('Emissions (CO2e)', fontsize=font_size)
-    
-    # Tight layout and save figure
-    plt.tight_layout()
-    plt.savefig(f'figs/{file_name}.png', bbox_inches='tight')
-    plt.show()
-    
-    # Close the writer and release Excel file
-    writer_emissions.close()
-    
-    print(f'Emissions results saved: results/{file_name}.xlsx')
-    print(f'Emissions bar plots saved: figs/{file_name}.png')
+            df_emissions.loc[res.name, par_label] = res.get_variable(par, facility_code)[0].vals[0]
+    df_emissions.columns = pd.MultiIndex.from_product([['Emissions']] + [df_emissions.columns.values])
+
+    # Populate the products in use
+    df_programs = pd.DataFrame(index=rows, columns=[p.label for p in programs], dtype=float)
+    for res in results:
+        for program in programs:
+            df_programs.loc[res.name, program.label] = res.model.program_instructions.alloc[program.name].interpolate(start_year)
+    df_programs.columns = pd.MultiIndex.from_product([['Interventions']] + [df_programs.columns.values])
+
+    # Populate costs and co-benefits
+    df_outcomes = pd.DataFrame(index=rows, columns=['Annual cost','Total cost','Cost co-benefits','Other co-benefits'])
+    for res in results:
+        df_outcomes.loc[res.name, 'Annual cost'] = sum(x.interpolate(start_year)[0] for x in res.model.program_instructions.alloc.values())
+        df_outcomes.loc[res.name, 'Total cost']  = sum([x.vals[0] for x in at.PlotData.programs(res, t_bins='all').series])
+        cost_cobenefit = 0
+        other_cobenefits = []
+        programs_funded = set()
+        for program in programs:
+            if res.model.program_instructions.alloc[program.name].interpolate(start_year):
+                programs_funded.add(program.name)
+        for program in programs_funded:
+            cost_cobenefit += cobenefits.at[program, 'Cost co-benefits']
+            if not pd.isna(cobenefits.at[program, 'Other co-benefits']):
+                other_cobenefits.append(cobenefits.at[program, 'Other co-benefits'])
+        df_outcomes.loc[res.name, 'Cost co-benefits'] = cost_cobenefit
+        df_outcomes.loc[res.name, 'Other co-benefits'] = ', '.join(other_cobenefits)
+    df_outcomes.columns = pd.MultiIndex.from_product([['Outcomes']] + [df_outcomes.columns.values])
+    df_outcomes.insert(0, ('Outcomes','Annual CO2'), df_emissions.sum(axis=1))
+
+    # Assemble the final dataframe
+    df = pd.concat([df_programs, df_emissions, df_outcomes], axis=1)
+    df.index.name = 'Scenario'
+    df['Facility'] = facility_code
+    df = df.set_index('Facility', append=True)
+
+    return df
 
 
-def plot_allocation(df: pd.DataFrame) -> plt.Figure:
+def plot_allocation(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     '''
-    Produces plot of allocation
+    Plot a bar graph of spending by intervention for each scenario
 
     :param df: A dataframe where the index is the name of the scenario, and the columns are interventions. If a
                column called 'Surplus budget' is provided, it will be plotted with a hatched pattern
+    :param title_suffix: Optionally specify a suffix to append to the title
     :return: A matplotlib figure
     '''
 
@@ -91,20 +91,20 @@ def plot_allocation(df: pd.DataFrame) -> plt.Figure:
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], labels[::-1], loc='upper left', bbox_to_anchor=(1.05, 1), title='Interventions', fontsize=20, title_fontsize=22)
-    ax.set_xticklabels(df.index, rotation=0)
+    ax.set_xticklabels(df.index, rotation=0 if df.index.str.len().max() < 12 else 90)
     ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('${x:,.0f}'))
-    ax.set_title('Budget allocation', fontsize=25)
+    ax.set_title('Budget allocation' + (f' - {title_suffix}' if title_suffix else ''), fontsize=25)
     ax.set_xlabel(None)
     fig.tight_layout()
     return fig
 
 
-def plot_emissions(df: pd.DataFrame, title:str='Total CO2e Emissions') -> plt.Figure:
+def plot_emissions(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     """
-    Plot emissions
+    Plot a bar graph of emissions by category for each scenario
 
     :param df: A dataframe where the index has the name of the scenario, and the columns are names of emissions sources
-    :param title: The title to display on the plot
+    :param title_suffix: Optionally specify a suffix to append to the title
     :return: A matplotlib Figure
     """
 
@@ -114,7 +114,7 @@ def plot_emissions(df: pd.DataFrame, title:str='Total CO2e Emissions') -> plt.Fi
     fig, ax = plt.subplots()
     df.iloc[:, ::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=font_size)
 
-    plt.title(title, fontsize=font_size + 2)
+    plt.title("Total CO2e Emissions" + (f' - {title_suffix}' if title_suffix else ''), fontsize=font_size + 2)
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], labels[::-1], title='Emission Sources', bbox_to_anchor=(1.0, 1.0), loc='upper left', fontsize=font_size - 2, title_fontsize=font_size)
@@ -141,6 +141,7 @@ def powerset(set):
     :return: Generator of all combinations
     """
     return itertools.chain.from_iterable(itertools.combinations(set, r) for r in range(len(set) + 1))
+
 
 def is_forbidden_combination(combo, forbidden=None):
     """

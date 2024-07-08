@@ -7,57 +7,44 @@ import sciris as sc
 import pandas as pd
 import matplotlib.pyplot as plt
 from utils import plot_emissions, plot_allocation
+from project import facility_code, exclusions
 
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
 
 
-def coverage_scenario(P, start_year, facility_code):
-    '''
-    Run a scenario where interventions are individually fully covered.
-    Results on emission reductions are saved in an excel sheet.
-    :param P: Atomica project.
-    :param start_year: Start year of simulations.
-    :param facility_code: Code of the facility.
-    :return: 
-    '''
-    results_scenario = [P.run_sim(parset='default',result_name='Status-quo')] # run status-quo
-    progset = P.progsets[0]
-
-    for prog in progset.programs:
-        coverage_scenario = {prog_all: 0 for prog_all in progset.programs}
-        coverage_scenario[prog] = 1
-        instructions = at.ProgramInstructions(start_year=start_year, coverage=coverage_scenario) # define program instructions
-        result_coverage = P.run_sim(parset='default',progset=P.progsets[0], progset_instructions=instructions, result_name=progset.programs[prog].label) # run budget scenario
-        results_scenario.append(result_coverage)
-        
-    # Calculate emissions 
-    ut.calc_emissions(results_scenario,start_year,facility_code,file_name='coverage_scenario_Emissions_{}'.format(facility_code),title='CO2e emissions - full coverage')
-
-def budget_scenario(P, start_year, facility_code, spending:int):
+def budget_scenario(P: at.Project, spending:int) -> pd.DataFrame:
     '''
     Run a scenario where spending on interventions are individually specified.
-    Results on emission reductions are saved in an excel sheet.
+    Results on emission reductions are saved in an Excel sheet.
+
     :param P: Atomica project.
     :param start_year: Start year of simulations.
-    :param facility_code: Code of the facility.
-    :param spending: Spending on individual interventions.
+    :param spending: Annual spending on individual interventions.
     :return: 
     '''
-    results_scenario = [P.run_sim(parset='default',result_name='Status-quo')] # run status-quo
     progset = P.progsets[0]
+
+    budget_scenario = {prog_all: 0 for prog_all in progset.programs}
+    results_scenario = [P.run_sim(parset='default', progset=P.progsets[0], progset_instructions=at.ProgramInstructions(start_year=P.settings.sim_start,alloc=budget_scenario) , result_name='Status-quo')]
 
     for prog in progset.programs:
         budget_scenario = {prog_all: 0 for prog_all in progset.programs}
         budget_scenario[prog] = spending
-        instructions = at.ProgramInstructions(start_year=start_year, alloc=budget_scenario) # define program instructions
+        instructions = at.ProgramInstructions(start_year=P.settings.sim_start, alloc=budget_scenario) # define program instructions
         result_budget = P.run_sim(parset='default',progset=P.progsets[0], progset_instructions=instructions, result_name=progset.programs[prog].label) # run budget scenario
         results_scenario.append(result_budget)
         
-    # Calculate emissions 
-    ut.calc_emissions(results_scenario,start_year,facility_code,file_name='budget_scenario_Emissions_{}'.format(facility_code),title='CO2e emissions - fixed budget (${:0,.0f})'.format(spending))
+    # Prepare and save outputs
+    df = ut.calc_emissions(results_scenario)
 
-def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=True) -> pd.DataFrame:
+    df_plot = df.copy()
+    df_plot.index = df_plot.index.droplevel(1)
+    save_scenario_outputs(df_plot, f'budget_scenario_{int(spending)}',title_suffix=f'fixed budget (${spending:,.0f})')
+
+    return df
+
+def run_all(P: at.Project, save:bool=True) -> pd.DataFrame:
 
     """
     Run all allowed combinations of interventions
@@ -72,7 +59,6 @@ def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=Tr
 
     :param P: Atomica project. The first program set (`P.progsets[0]`) will be used automatically. The start year
               is drawn from the project settings. The facility code is drawn from the population name in the project data
-
     :param progset: Atomica program set.
     :param start_year: Start year of simulations.
     :param forbidden_combos: Optionally specify list of sets of interventions that are mutually exclusive. Only one item from each set may be present in the scenario
@@ -81,7 +67,7 @@ def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=Tr
     """
 
     #generate all program combos
-    combos = [combo for combo in ut.powerset(P.progsets[0].programs) if not ut.is_forbidden_combination(combo, forbidden_combos)]
+    combos = [combo for combo in ut.powerset(P.progsets[0].programs) if not ut.is_forbidden_combination(combo, exclusions)]
 
     #run sims of all allowed program combinations
     results = sc.odict()
@@ -92,47 +78,7 @@ def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=Tr
             instructions = at.ProgramInstructions(start_year=P.settings.sim_start, alloc=alloc) # define program instructions
             results[combo] = P.run_sim(parset='default', progset=P.progsets[0], progset_instructions=instructions, result_name='S'+''.join(['1' if p.name in combo else '0' for p in programs]))  # run scenario
 
-    # Calculate emissions/costs and output dataframe
-    facility_code = results[0].pop_names[0]
-    parameters = [par for par in P.framework.pars.index if '_mult' not in par and '_emissions' not in par and '_baseline' not in par]
-    par_labels = [par.replace('_', ' ').title() for par in parameters]
-
-    # Populate emissions dataframe
-    rows = [res.name for res in results.values()]
-    df_emissions = pd.DataFrame(index=rows) #, columns=par_labels)
-    for par, par_label in zip(parameters, par_labels):
-        for res in results.values():
-            df_emissions.loc[res.name, par_label] = res.get_variable(par, facility_code)[0].vals[0]
-    df_emissions.columns = pd.MultiIndex.from_product([['Emissions']] + [df_emissions.columns.values])
-
-    # Populate the products in use
-    df_programs = pd.DataFrame(index=rows, columns=[p.label for p in programs], dtype=float)
-    for k, res in results.items():
-        for program in programs:
-            df_programs.loc[res.name, program.label] = res.model.program_instructions.alloc[program.name].interpolate(P.settings.sim_start)
-    df_programs.columns = pd.MultiIndex.from_product([['Interventions']] + [df_programs.columns.values])
-
-    # Populate costs and co-benefits
-    df_outcomes = pd.DataFrame(index=rows, columns=['Annual cost','Total cost','Cost co-benefits','Other co-benefits'])
-    for k, res in results.items():
-        df_outcomes.loc[res.name, 'Annual cost'] = sum(x.interpolate(P.settings.sim_start)[0] for x in res.model.program_instructions.alloc.values())
-        df_outcomes.loc[res.name, 'Total cost']  = sum([x.vals[0] for x in at.PlotData.programs(res, t_bins='all').series])
-        cost_cobenefit = 0
-        other_cobenefits = []
-        for program in k:
-            cost_cobenefit += cobenefits.at[program, 'Cost co-benefits']
-            if not pd.isna(cobenefits.at[program, 'Other co-benefits']):
-                other_cobenefits.append(cobenefits.at[program, 'Other co-benefits'])
-        df_outcomes.loc[res.name, 'Cost co-benefits'] = cost_cobenefit
-        df_outcomes.loc[res.name, 'Other co-benefits'] = ', '.join(other_cobenefits)
-    df_outcomes.columns = pd.MultiIndex.from_product([['Outcomes']] + [df_outcomes.columns.values])
-    df_outcomes.insert(0, ('Outcomes','Annual CO2'), df_emissions.sum(axis=1))
-
-    # Assemble the final dataframe
-    df = pd.concat([df_programs, df_emissions, df_outcomes], axis=1)
-    df.index.name = 'Scenario'
-    df['Facility'] = facility_code
-    df = df.set_index('Facility', append=True)
+    df = ut.calc_emissions(list(results.values()))
 
     if save:
         with pd.ExcelWriter(f'results/all_scenarios_{facility_code}.xlsx', engine='xlsxwriter') as writer:
@@ -187,21 +133,22 @@ def run_all(P, cobenefits:pd.DataFrame, forbidden_combos:list=None, save:bool=Tr
     return df
 
 
-def save_scenario_outputs(df, facility_code: str, prefix: str):
+def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
     """
     Save figures and Excel outputs
 
     :param df: A subset of the rows from `run_all()` with a single index level containing scenario names
-    :param facility_code: The facility code to use
     :param prefix: Prefix to use for the file (e.g., 'optimization' or 'coverage')
+    :param title_suffix: Optional string to append to the plot titles
     :return:
     """
     # Allocation outputs
     alloc = df['Interventions']
     alloc = alloc.drop('Status-quo')
+    alloc.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in alloc.index]
 
     # Allocation plot
-    fig = plot_allocation(alloc)
+    fig = plot_allocation(alloc, title_suffix)
     file_name = f'figs/{prefix}_Budget_Allocation_{facility_code}.png'
     fig.savefig(file_name, dpi=300)
     plt.close(fig)
@@ -217,7 +164,7 @@ def save_scenario_outputs(df, facility_code: str, prefix: str):
     emissions.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in emissions.index]
 
     # Emissions plot
-    fig = plot_emissions(emissions)
+    fig = plot_emissions(emissions, title_suffix)
     file_name = f'figs/{prefix}_Emissions_{facility_code}.png'
     fig.savefig(file_name, dpi=300)
     plt.close(fig)
@@ -262,7 +209,6 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
              according to the requested budget levels
     """
 
-    facility_code = df.index.get_level_values('Facility')[0]
     dfs = []
 
     df2 = df.loc[df[('Outcomes', 'Total cost')] == 0]
@@ -286,7 +232,7 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
     df.insert(0, ('Interventions','Surplus budget'),df.index.values[1:] - df['Interventions'][1:].sum(axis=1))
 
     # Save output files
-    save_scenario_outputs(df, facility_code, 'optimization')
+    save_scenario_outputs(df, 'optimization')
 
     # Prepare final dataframe
     df = df.drop(('Interventions', 'Surplus budget'), axis=1)
@@ -310,9 +256,6 @@ def coverage_scenario(df: pd.DataFrame) -> pd.DataFrame:
              according to the requested budget levels
     """
 
-    # Extract facility code
-    facility_code = df.index.get_level_values('Facility')[0]
-
     # Find only scenarios with at most 1 intervention
     df = df.loc[df.index.get_level_values('Scenario').map(lambda x: sum(y == '1' for y in x))<=1]
 
@@ -327,7 +270,7 @@ def coverage_scenario(df: pd.DataFrame) -> pd.DataFrame:
     df.index = scen_names
 
     # Save output files
-    save_scenario_outputs(df, facility_code, prefix='coverage_scenario')
+    save_scenario_outputs(df, 'coverage_scenario')
 
     # Prepare final dataframe
     df.index.name='Scenario'
