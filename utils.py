@@ -195,7 +195,8 @@ def is_forbidden_combination(combo, forbidden=None):
     :param forbidden: List of forbidden program combinations
     :return: Boolean, True if program list contains a forbidden combination
     """
-    for f in forbidden:
-        if len(f & set(combo)) > 1:
-            return True
+    if forbidden is not None:
+        for f in forbidden:
+            if len(f & set(combo)) > 1:
+                return True
     return False
