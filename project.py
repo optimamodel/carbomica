@@ -31,6 +31,7 @@ P.load_progbook('books/carbomica_progbook_{}.xlsx'.format(facility_code))
 
 # Load co-benefits
 cobenefits = pd.read_excel(input_data_sheet, sheet_name='interventions', index_col='Code Name').reindex(['Cost co-benefits','Other co-benefits'], axis=1)
+cobenefits['Cost co-benefits'] = cobenefits['Cost co-benefits'].fillna(0)
 
 # Load exclusions
 try:
