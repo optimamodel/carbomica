@@ -128,10 +128,13 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
     df.index = df.index.get_level_values('optimal')
 
     # Allocation outputs
-    df.insert(0, ('Interventions','Surplus budget'),df.index.values[1:] - df['Interventions'][1:].sum(axis=1))
+
+    df = df.reset_index()
+    df.insert(0, ('Interventions','Surplus budget'),df['optimal'].values[1:] - df['Interventions'][1:].sum(axis=1))
+    df = df.set_index('optimal')
 
     # Rename the scenarios with proper formatting
-    df.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in df.index.get_level_values(0)]
+    df.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in df.index]
 
     # Save output files
     df = save_scenario_outputs(df, 'optimization')
