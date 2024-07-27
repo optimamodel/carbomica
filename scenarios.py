@@ -6,6 +6,7 @@ import sciris as sc
 import pandas as pd
 from utils import save_scenario_outputs
 from project import facility_code, exclusions
+import numpy as np
 
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
@@ -13,14 +14,15 @@ if not os.path.exists('figs'): os.makedirs('figs')
 
 def budget_scenario(P: at.Project, spending:int) -> pd.DataFrame:
     '''
-    Run a scenario where spending on interventions are individually specified.
+    Run a set of scenarios with the same specified spending on each intervention
+
     Results on emission reductions are saved in an Excel sheet.
 
     :param P: Atomica project.
-    :param start_year: Start year of simulations.
-    :param spending: Annual spending on individual interventions.
-    :return: 
+    :param spending: Total spend for each intervention
+    :return: A dataframe with scenario outputs
     '''
+
     progset = P.progsets[0]
 
     budget_scenario = {prog_all: 0 for prog_all in progset.programs}
@@ -28,7 +30,7 @@ def budget_scenario(P: at.Project, spending:int) -> pd.DataFrame:
 
     for prog in progset.programs:
         budget_scenario = {prog_all: 0 for prog_all in progset.programs}
-        budget_scenario[prog] = spending
+        budget_scenario[prog] = spending/(P.settings.sim_end-P.settings.sim_start) # Adjust the alloc down to annual spend
         instructions = at.ProgramInstructions(start_year=P.settings.sim_start, alloc=budget_scenario) # define program instructions
         result_budget = P.run_sim(parset='default',progset=P.progsets[0], progset_instructions=instructions, result_name=progset.programs[prog].label) # run budget scenario
         results_scenario.append(result_budget)
@@ -113,28 +115,31 @@ def optimize(df: pd.DataFrame, budgets: list) -> pd.DataFrame:
 
     dfs = []
 
-    df2 = df.loc[df[('Outcomes', 'Total cost')] == 0]
+    tspan = df.columns[0][0].split(' ')[1]
+    outcome_header = f'Outcomes {tspan}'
+
+    df2 = df.loc[df[(outcome_header, 'Total cost')] == 0]
     df2['optimal'] = 'Status-quo'
     dfs.append(df2)
 
     for budget in budgets:
-        df2 = df.loc[df[('Outcomes', 'Annual cost')] <= budget]
-        df2 = df2.loc[df2[('Outcomes', 'Annual CO2')] == df2[('Outcomes', 'Annual CO2')].min()]
-        df2 = df2.loc[df2[('Outcomes', 'Annual cost')] == df2[('Outcomes', 'Annual cost')].min()]
-        df2 = df2.loc[df2[('Outcomes', 'Cost co-benefits')] == df2[('Outcomes', 'Cost co-benefits')].max()]
+        df2 = df.loc[df[(outcome_header, 'Total cost')] <= budget]
+        df2 = df2.loc[df2[(outcome_header, 'Net emissions')] == df2[(outcome_header, 'Net emissions')].min()]
+        df2 = df2.loc[df2[(outcome_header, 'Total cost')] == df2[(outcome_header, 'Total cost')].min()]
+        df2 = df2.loc[df2[(outcome_header, 'Cost co-benefits')] == df2[(outcome_header, 'Cost co-benefits')].max()]
         df2['optimal'] = budget
         dfs.append(df2)
     df = pd.concat(dfs).set_index('optimal', append=True)
     df.index = df.index.get_level_values('optimal')
 
     # Allocation outputs
-
+    cost_header = f'Cost {tspan}'
     df = df.reset_index()
-    df.insert(0, ('Interventions','Surplus budget'),df['optimal'].values[1:] - df['Interventions'][1:].sum(axis=1))
+    df.insert(0, (cost_header,'Surplus budget'),df['optimal'].values[1:] - df[cost_header][1:].sum(axis=1))
     df = df.set_index('optimal')
 
     # Rename the scenarios with proper formatting
-    df.index = [f"${x:,.0f}" if sc.isnumber(x) else x for x in df.index]
+    df.index = [f"${np.format_float_positional(x, trim='-')}" if sc.isnumber(x) else x for x in df.index]
 
     # Save output files
     df = save_scenario_outputs(df, 'optimization')
@@ -161,9 +166,12 @@ def coverage_scenario(df: pd.DataFrame) -> pd.DataFrame:
     df = df.loc[df.index.get_level_values('Scenario').map(lambda x: sum(y == '1' for y in x))<=1]
 
     # Get the corresponding intervention and use it to name the scenario
+    tspan = df.columns[0][0].split(' ')[1]
+    cost_header = f'Cost {tspan}'
+
     scen_names = []
     for _, row in df.iterrows():
-        match = row['Interventions'].index[row['Interventions']>0]
+        match = row[cost_header].index[row[cost_header]>0]
         if len(match) == 0:
             scen_names.append('Status-quo')
         else:

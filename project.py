@@ -30,7 +30,8 @@ P.settings.sim_end   = end_year # simulation end year
 P.load_progbook('books/carbomica_progbook_{}.xlsx'.format(facility_code))
 
 # Load co-benefits
-cobenefits = pd.read_excel(input_data_sheet, sheet_name='interventions', index_col='Code Name').reindex(['Cost co-benefits','Other co-benefits'], axis=1)
+cobenefits = pd.read_excel(input_data_sheet, sheet_name='interventions', index_col='Code Name').reindex(['Additional annual CO2 reduction','Cost co-benefits','Other co-benefits'], axis=1)
+cobenefits['Additional annual CO2 reduction'] = cobenefits['Additional annual CO2 reduction'].fillna(0)
 cobenefits['Cost co-benefits'] = cobenefits['Cost co-benefits'].fillna(0)
 
 # Load exclusions

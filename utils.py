@@ -6,6 +6,7 @@ import itertools
 import sciris as sc
 from project import cobenefits, emissions_pars, facility_code
 from collections import defaultdict
+import numpy as np
 
 def calc_emissions(results: list) -> pd.DataFrame:
     '''
@@ -18,44 +19,54 @@ def calc_emissions(results: list) -> pd.DataFrame:
     facility_code = results[0].pop_names[0]
     start_year = results[0].t[0]
 
-    # Calculate emissions/costs and output dataframe
-    par_labels = [par.replace('_', ' ').title() for par in emissions_pars]
-
-
-    # Populate emissions dataframe
+    # Calculate spending on each intervention
     rows = [res.name for res in results]
-    df_emissions = pd.DataFrame(index=rows) #, columns=par_labels)
-    for par, par_label in zip(emissions_pars, par_labels):
-        for res in results:
-            df_emissions.loc[res.name, par_label] = res.get_variable(par, facility_code)[0].vals[0]
-    df_emissions.columns = pd.MultiIndex.from_product([['Emissions']] + [df_emissions.columns.values])
-
-    # Populate the products in use
     df_programs = pd.DataFrame(index=rows, columns=[p.label for p in programs], dtype=float)
     for res in results:
+        spending = {s.output:s.vals[0] for s in at.PlotData.programs(res, t_bins='all').series}
         for program in programs:
-            df_programs.loc[res.name, program.label] = res.model.program_instructions.alloc[program.name].interpolate(start_year)
-    df_programs.columns = pd.MultiIndex.from_product([['Interventions']] + [df_programs.columns.values])
+            df_programs.loc[res.name, program.label] = spending[program.name]
 
-    # Populate costs and co-benefits
-    df_outcomes = pd.DataFrame(index=rows, columns=['Annual cost','Total cost','Cost co-benefits','Other co-benefits'])
+    # Populate emissions dataframe
+    df_emissions = pd.DataFrame(index=rows, columns=emissions_pars)
     for res in results:
-        df_outcomes.loc[res.name, 'Annual cost'] = sum(x.interpolate(start_year)[0] for x in res.model.program_instructions.alloc.values())
-        df_outcomes.loc[res.name, 'Total cost']  = sum([x.vals[0] for x in at.PlotData.programs(res, t_bins='all').series])
+        emissions = {s.output:s.vals[0] for s in at.PlotData(res, outputs=emissions_pars, t_bins='all', time_aggregation='integrate').series}
+        for k,v in emissions.items():
+            df_emissions.at[res.name, k] = v
+    df_emissions.columns = [name.replace('_', ' ').title() for name in df_emissions.columns]
+    df_emissions['Additional CO2 reductions'] = 0
+
+    # Populate outcomes (totals and co-benefits)
+    df_outcomes = pd.DataFrame(index=rows, columns=['Total cost','Total emissions', 'Net emissions', 'Cost co-benefits','Other co-benefits'])
+    for res in results:
         cost_cobenefit = 0
+        additional_co2_reduction = 0
         other_cobenefits = []
-        programs_funded = set()
+
         for program in programs:
             if res.model.program_instructions.alloc[program.name].interpolate(start_year):
-                programs_funded.add(program.name)
-        for program in programs_funded:
-            cost_cobenefit += cobenefits.at[program, 'Cost co-benefits']
-            if not pd.isna(cobenefits.at[program, 'Other co-benefits']):
-                other_cobenefits.append(cobenefits.at[program, 'Other co-benefits'])
+                cost_cobenefit += cobenefits.at[program.name, 'Cost co-benefits']
+                additional_co2_reduction += cobenefits.at[program.name, 'Additional annual CO2 reduction']
+                if not pd.isna(cobenefits.at[program.name, 'Other co-benefits']):
+                    other_cobenefits.append(cobenefits.at[program.name, 'Other co-benefits'])
+
         df_outcomes.loc[res.name, 'Cost co-benefits'] = cost_cobenefit
         df_outcomes.loc[res.name, 'Other co-benefits'] = ', '.join(other_cobenefits)
-    df_outcomes.columns = pd.MultiIndex.from_product([['Outcomes']] + [df_outcomes.columns.values])
-    df_outcomes.insert(0, ('Outcomes','Annual CO2'), df_emissions.sum(axis=1))
+
+        # nb. Store the CO2 co-benefit in the emissions dataframe. It is multiplied by the simulation duration
+        # to calculate a total value rather than annual value, and it is negative due to being a reduction
+        df_emissions.loc[res.name, 'Additional CO2 reductions'] = -additional_co2_reduction*(res.t[-1]-res.t[0]) if additional_co2_reduction else 0
+
+    # Add columns for total cost and emissions based on the other dataframes
+    df_outcomes['Total cost'] = df_programs.sum(axis=1)
+    df_outcomes['Net emissions'] = df_emissions.sum(axis=1)
+    df_outcomes['Total emissions'] = df_outcomes['Net emissions']-df_emissions['Additional CO2 reductions']
+
+    # Add extra header row to the dataframe
+    tspan = f"({np.format_float_positional(res.t[0], trim='-')}-{np.format_float_positional(res.t[-1], trim='-')})"
+    df_programs.columns = pd.MultiIndex.from_product([[f'Cost {tspan}']] + [df_programs.columns.values])
+    df_emissions.columns = pd.MultiIndex.from_product([[f'Emissions {tspan}']] + [df_emissions.columns.values])
+    df_outcomes.columns = pd.MultiIndex.from_product([[f'Outcomes {tspan}']] + [df_outcomes.columns.values])
 
     # Assemble the final dataframe
     df = pd.concat([df_programs, df_emissions, df_outcomes], axis=1)
@@ -67,17 +78,18 @@ def calc_emissions(results: list) -> pd.DataFrame:
 
 
 def save_formatted_results(df, file_name):
+
     with pd.ExcelWriter(file_name, engine='xlsxwriter') as writer:
         # Apply header colors
         def format(_):
             s = df.columns.get_level_values(0)
             out = []
             for val in s:
-                if val == 'Interventions':
+                if val.startswith('Cost'):
                     color = "#fbb4ae"
-                elif val == "Emissions":
+                elif val.startswith("Emissions"):
                     color = " #b3cde3"
-                elif val == "Outcomes":
+                elif val.startswith("Outcomes"):
                     color = "#ccebc5"
                 out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
             return out
@@ -94,9 +106,13 @@ def save_formatted_results(df, file_name):
         formats = {}
         currency_format = workbook.add_format({'num_format': '$#,##0.00'})
 
-        for program in df['Interventions'].columns:
-            formats[df.columns.get_loc(('Interventions', program)) + df.index.nlevels] = currency_format
-        for cost_col in [('Outcomes', 'Annual cost'), ('Outcomes', 'Total cost'), ('Outcomes', 'Cost co-benefits')]:
+        tspan = df.columns[0][0].split(' ')[1]
+        cost_header = f'Cost {tspan}'
+        for program in df[cost_header].columns:
+            formats[df.columns.get_loc((cost_header, program)) + df.index.nlevels] = currency_format
+
+        outcome_header = f'Outcomes {tspan}'
+        for cost_col in [(outcome_header, 'Total cost'), (outcome_header, 'Cost co-benefits')]:
             formats[df.columns.get_loc(cost_col) + df.index.nlevels] = currency_format
 
         # Determine required column widths
@@ -145,28 +161,57 @@ def plot_allocation(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     ax.legend(handles[::-1], labels[::-1], loc='upper left', bbox_to_anchor=(1.05, 1), title='Interventions', fontsize=20, title_fontsize=22)
     ax.set_xticklabels(df.index, rotation=0 if df.index.str.len().max() < 12 else 90)
     ax.yaxis.set_major_formatter(mpl.ticker.StrMethodFormatter('${x:,.0f}'))
-    ax.set_title('Budget allocation' + (f' - {title_suffix}' if title_suffix else ''), fontsize=25)
+
+    ax.set_title('Budget allocation' + (f' {title_suffix}' if title_suffix else ''), fontsize=25)
     ax.set_xlabel(None)
     fig.tight_layout()
     return fig
 
 
-def plot_emissions(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
+def plot_emissions(df: pd.DataFrame, title_suffix:str=None, net_emissions=True) -> plt.Figure:
     """
     Plot a bar graph of emissions by category for each scenario
 
     :param df: A dataframe where the index has the name of the scenario, and the columns are names of emissions sources
     :param title_suffix: Optionally specify a suffix to append to the title
+    :param net_emissions: If False, additional CO2 reductions will be shown as a separate bar below the other emissions
+                        sources. The total height of the bar corresponds to all modelled emissions without accounting
+                        for other CO2 reductions. If True, additional CO2 reductions will be applied as an offset to each
+                        column of bars, so the total height of the bar group corresponds to net emissions.
+                        - Total emissions is intended to convey the total emitted CO2 per source, with additional
+                          CO2 co-benefits explicitly represented as a separate bar
+                        - Net emissions is intended to convey the relative climate benefit of each scenario accounting
+                          for additional CO2 reductions
+                        Note that optimization is performed on the basis of net emissions, therefore it may be possible for
+                        a scenario to have higher total emissions but still be preferable due to additional CO2 reductions.
+                        The net emissions plot will show a lower bar for optimal scenarios, whereas the total emissions plot
+                        may not. However, the net emissions plot may be counterintuitive to read if the additional CO2 reduction
+                        is very large compared to other emissions sources - the top edge of the bar corresponds to the net
+                        emissions for
     :return: A matplotlib Figure
     """
 
     font_size = 22
-    colors = None # sc.gridcolors(df.shape[1]) # Original code had no special colormap
+
+    cmap = mpl.colormaps['tab20']
+    colors = cmap.colors[0::2]+cmap.colors[1::2]
+    colors = [colors[i%len(colors)] for i in range(len(df.columns))][::-1]
 
     fig, ax = plt.subplots()
-    df.iloc[:, ::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=font_size)
 
-    plt.title("Total CO2e Emissions" + (f' - {title_suffix}' if title_suffix else ''), fontsize=font_size + 2)
+    if net_emissions:
+        bottom = df['Additional CO2 reductions'].values
+        df = df.drop(columns='Additional CO2 reductions')
+        df.iloc[:, ::-1].plot.bar(stacked=True, color=colors[1:], ax=ax, fontsize=font_size, bottom=bottom)
+    else:
+        if not df['Additional CO2 reductions'].any():
+            df = df.drop(columns='Additional CO2 reductions')
+        df.iloc[:, ::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=font_size)
+
+        # Apply hatched pattern to "Additional CO2 reductions" bars
+        for bar, label in zip(ax.patches, df.columns[::-1].repeat(df.shape[0])):
+            if label == "Additional CO2 reductions":
+                bar.set_hatch('//')  # Applying hatched pattern
 
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], labels[::-1], title='Emission Sources', bbox_to_anchor=(1.0, 1.0), loc='upper left', fontsize=font_size - 2, title_fontsize=font_size)
@@ -175,6 +220,16 @@ def plot_emissions(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     ax.set_xticklabels(df.index, ha='center', rotation=90)
     ax.set_xlabel(None)
     ax.set_ylabel('Emissions (CO2e)', fontsize=font_size)
+
+    if net_emissions:
+        ax.set_title("Net CO2e Emissions" + (f' {title_suffix}' if title_suffix else ''), fontsize=font_size + 2)
+    else:
+        ax.set_title("Total CO2e Emissions" + (f' {title_suffix}' if title_suffix else ''), fontsize=font_size + 2)
+
+    if ((not net_emissions) and 'Additional CO2 reductions' in df.columns) or (net_emissions and bottom.min() < 0):
+        ax.axhline(0, color='black', linewidth=0.5)
+    else:
+        ax.set_ylim(bottom=0)
 
     fig.set_size_inches(max(15, len(df) * 1.5), 10)
     fig.tight_layout()
@@ -192,8 +247,14 @@ def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
     :return:
     """
 
+    tspan = df.columns[0][0].split(' ')[1]
+    if title_suffix:
+        title_suffix = f'{tspan[1:-1]} ({title_suffix})'
+    else:
+        title_suffix = tspan[1:-1]
+
     # Allocation outputs
-    alloc = df['Interventions']
+    alloc = df[f'Cost {tspan}']
     alloc = alloc.drop('Status-quo')
 
     # Allocation plot
@@ -209,14 +270,20 @@ def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
     print(f'Allocation spreadsheet saved: {file_name}')
 
     # Emissions outputs
-    emissions = df['Emissions']
+    emissions = df[f'Emissions {tspan}']
 
-    # Emissions plot
-    fig = plot_emissions(emissions, title_suffix)
-    file_name = f'figs/{prefix}_Emissions_{facility_code}.png'
+    # Emissions plots
+    fig = plot_emissions(emissions, title_suffix, net_emissions=True)
+    file_name = f'figs/{prefix}_Net_Emissions_{facility_code}.png'
     fig.savefig(file_name, dpi=300)
     plt.close(fig)
-    print(f'Emissions bar plots saved: {file_name}')
+    print(f'Net emissions bar plots saved: {file_name}')
+
+    fig = plot_emissions(emissions, title_suffix, net_emissions=False)
+    file_name = f'figs/{prefix}_Total_Emissions_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Total emissions bar plots saved: {file_name}')
 
     # Emissions spreadsheet
     file_name = f'results/{prefix}_Emissions_{facility_code}.xlsx'
