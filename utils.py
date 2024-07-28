@@ -206,6 +206,7 @@ def plot_emissions(df: pd.DataFrame, title_suffix:str=None, net_emissions=True) 
     else:
         if not df['Additional CO2 reductions'].any():
             df = df.drop(columns='Additional CO2 reductions')
+            colors = colors[1:]
         df.iloc[:, ::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=font_size)
 
         # Apply hatched pattern to "Additional CO2 reductions" bars
