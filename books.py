@@ -2,6 +2,8 @@ import atomica as at
 import pandas as pd
 import os
 import numpy as np
+import itertools
+
 if not os.path.exists('books'): os.makedirs('books')
 '''
 Function to generate a framework, databook and progbook.
@@ -125,5 +127,21 @@ def generate_books(input_data_sheet, start_year, end_year):
                 progs[intervention] = effect
             P.covouts[(par+'_mult', facility_code)] = at.programs.Covout(par=par+'_mult',pop=facility_code,cov_interaction='random',baseline=0,progs=progs)
         P.programs[intervention].spend_data = at.TimeSeries(data_years,0, units='$/year') # make initial spending a small, negligible but non-zero number for optimisation initialisation
-    P.save('books/carbomica_progbook_{}.xlsx'.format(facility_code))  
+
+
+    # Explicitly set combined outcomes
+    powerset = lambda x: itertools.chain.from_iterable(itertools.combinations(x, r) for r in range(len(x) + 1))
+    for covout in P.covouts.values():
+        s = []
+        for combo in powerset(covout.progs):
+            if not combo:
+                continue
+            v = 0
+            for prog in combo:
+                v += covout.progs[prog]
+            s.append('+'.join(combo)+'='+str(v))
+        covout.imp_interaction = ','.join(s)
+
+    # Save final progbook
+    P.save('books/carbomica_progbook_{}.xlsx'.format(facility_code))
         
