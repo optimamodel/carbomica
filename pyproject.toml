@@ -1,10 +1,32 @@
 [project]
 name = "carbomica"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "CARBOMICA: a carbon mitigation and resource allocation modelling tool for the healthcare sector"
 readme = "README.md"
 requires-python = ">=3.14"
+license = "MIT"
+keywords = [
+    "carbon emissions",
+    "climate and health",
+    "healthcare facilities",
+    "mitigation",
+    "resource allocation",
+    "optimization",
+    "atomica",
+]
+
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
     "atomica>=1.32.1",
     "jinja2>=3.1.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/optimamodel/carbomica"
+Repository = "https://github.com/optimamodel/carbomica"
+Documentation ="https://climahealth.info/resource-library/carbomica-a-carbon-mitigation-and-resource-allocation-modelling-tool-for-the-healthcare-sector-in-east-africa/"
