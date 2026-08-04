@@ -12,7 +12,7 @@ np.random.seed(20232212) # MODIFY AS NEEDED
 df = run_all(P)
 
 # Return optimal budgets at various levels
-budgets = [20e3, 50e3, 100e3, 200e3, 250e3] # MODIFY AS NEEDED
+budgets = [3e3, 5e3, 10e3] # MODIFY AS NEEDED
 df_optimization = optimize(df, budgets)
 
 # Coverage scenarios (extracted from full run)

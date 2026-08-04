@@ -1,12 +1,22 @@
+
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pandas as pd
 import atomica as at
 import itertools
-import sciris as sc
 from project import cobenefits, emissions_pars, facility_code
 from collections import defaultdict
 import numpy as np
+
+# Define a set of well-separated colors
+def get_distinct_colors(n):
+    cmap = mpl.colormaps['tab20']  # 'tab20' has 20 distinct colors
+    colors = cmap.colors[:n]
+    if n > 20:
+        # If more than 20 colors are needed, generate additional distinct colors
+        cmap_extended = mpl.colormaps['hsv'].resampled(n)  # hsv can generate many distinct colors
+        colors = cmap_extended(np.linspace(0, 1, n))
+    return colors
 
 def calc_emissions(results: list) -> pd.DataFrame:
     '''
@@ -23,21 +33,21 @@ def calc_emissions(results: list) -> pd.DataFrame:
     rows = [res.name for res in results]
     df_programs = pd.DataFrame(index=rows, columns=[p.label for p in programs], dtype=float)
     for res in results:
-        spending = {s.output:s.vals[0] for s in at.PlotData.programs(res, t_bins='all').series}
+        spending = {s.output: s.vals[0] for s in at.PlotData.programs(res, t_bins='all').series}
         for program in programs:
             df_programs.loc[res.name, program.label] = spending[program.name]
 
     # Populate emissions dataframe
     df_emissions = pd.DataFrame(index=rows, columns=emissions_pars)
     for res in results:
-        emissions = {s.output:s.vals[0] for s in at.PlotData(res, outputs=emissions_pars, t_bins='all', time_aggregation='integrate').series}
-        for k,v in emissions.items():
+        emissions = {s.output: s.vals[0] for s in at.PlotData(res, outputs=emissions_pars, t_bins='all', time_aggregation='integrate').series}
+        for k, v in emissions.items():
             df_emissions.at[res.name, k] = v
     df_emissions.columns = [name.replace('_', ' ').title() for name in df_emissions.columns]
     df_emissions['Additional CO2 reductions'] = 0
 
     # Populate outcomes (totals and co-benefits)
-    df_outcomes = pd.DataFrame(index=rows, columns=['Total cost','Total emissions', 'Net emissions', 'Cost co-benefits','Other co-benefits'])
+    df_outcomes = pd.DataFrame(index=rows, columns=['Total cost', 'Total emissions', 'Net emissions', 'Cost co-benefits', 'Other co-benefits'])
     for res in results:
         cost_cobenefit = 0
         additional_co2_reduction = 0
@@ -53,20 +63,19 @@ def calc_emissions(results: list) -> pd.DataFrame:
         df_outcomes.loc[res.name, 'Cost co-benefits'] = cost_cobenefit
         df_outcomes.loc[res.name, 'Other co-benefits'] = ', '.join(other_cobenefits)
 
-        # nb. Store the CO2 co-benefit in the emissions dataframe. It is multiplied by the simulation duration
-        # to calculate a total value rather than annual value, and it is negative due to being a reduction
-        df_emissions.loc[res.name, 'Additional CO2 reductions'] = -additional_co2_reduction*(res.t[-1]-res.t[0]) if additional_co2_reduction else 0
+        # Store the CO2 co-benefit in the emissions dataframe
+        df_emissions.loc[res.name, 'Additional CO2 reductions'] = -additional_co2_reduction * (res.t[-1] - res.t[0]) if additional_co2_reduction else 0
 
     # Add columns for total cost and emissions based on the other dataframes
     df_outcomes['Total cost'] = df_programs.sum(axis=1)
     df_outcomes['Net emissions'] = df_emissions.sum(axis=1)
-    df_outcomes['Total emissions'] = df_outcomes['Net emissions']-df_emissions['Additional CO2 reductions']
+    df_outcomes['Total emissions'] = df_outcomes['Net emissions'] - df_emissions['Additional CO2 reductions']
 
     # Add extra header row to the dataframe
     tspan = f"({np.format_float_positional(res.t[0], trim='-')}-{np.format_float_positional(res.t[-1], trim='-')})"
-    df_programs.columns = pd.MultiIndex.from_product([[f'Cost {tspan}']] + [df_programs.columns.values])
-    df_emissions.columns = pd.MultiIndex.from_product([[f'Emissions {tspan}']] + [df_emissions.columns.values])
-    df_outcomes.columns = pd.MultiIndex.from_product([[f'Outcomes {tspan}']] + [df_outcomes.columns.values])
+    df_programs.columns = pd.MultiIndex.from_product([[f'Cost {tspan}'], df_programs.columns.values])
+    df_emissions.columns = pd.MultiIndex.from_product([[f'Emissions {tspan}'], df_emissions.columns.values])
+    df_outcomes.columns = pd.MultiIndex.from_product([[f'Outcomes {tspan}'], df_outcomes.columns.values])
 
     # Assemble the final dataframe
     df = pd.concat([df_programs, df_emissions, df_outcomes], axis=1)
@@ -78,7 +87,6 @@ def calc_emissions(results: list) -> pd.DataFrame:
 
 
 def save_formatted_results(df, file_name):
-
     with pd.ExcelWriter(file_name, engine='xlsxwriter') as writer:
         # Apply header colors
         def format(_):
@@ -88,7 +96,7 @@ def save_formatted_results(df, file_name):
                 if val.startswith('Cost'):
                     color = "#fbb4ae"
                 elif val.startswith("Emissions"):
-                    color = " #b3cde3"
+                    color = "#b3cde3"
                 elif val.startswith("Outcomes"):
                     color = "#ccebc5"
                 out.append(f"background-color: {color};border-color: black; border-width: 1px; border-style: solid;text-align:center;font-weight:bold;")
@@ -133,7 +141,7 @@ def save_formatted_results(df, file_name):
         # `df = pd.read_excel(f'results/all_scenarios_{pop}.xlsx', index_col=[0,1], header=[0,1])`
 
 
-def plot_allocation(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
+def plot_allocation(df: pd.DataFrame, title_suffix: str = None) -> plt.Figure:
     '''
     Plot a bar graph of spending by intervention for each scenario
 
@@ -143,14 +151,11 @@ def plot_allocation(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     :return: A matplotlib figure
     '''
 
-    # Select colormap
-    # colormap = plt.cm.tab20     # https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
-    # colors = [colormap(i) for i in range(len(df.columns))]
-    colors = sc.gridcolors(df.shape[1])
+    colors = get_distinct_colors(len(df.columns))
 
     fig, ax = plt.subplots()
-    df.iloc[:,::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=22)
-    fig.set_size_inches(len(df)*2.5+6,10)
+    df.iloc[:, ::-1].plot.bar(stacked=True, color=colors, ax=ax, fontsize=22)
+    fig.set_size_inches(len(df) * 2.5 + 6, 10)
 
     # Apply hatched pattern to "Surplus budget" bars
     for bar, label in zip(ax.patches, df.columns[::-1].repeat(df.shape[0])):
@@ -168,7 +173,7 @@ def plot_allocation(df: pd.DataFrame, title_suffix:str=None) -> plt.Figure:
     return fig
 
 
-def plot_emissions(df: pd.DataFrame, title_suffix:str=None, net_emissions=True) -> plt.Figure:
+def plot_emissions(df: pd.DataFrame, title_suffix: str = None, net_emissions=True) -> plt.Figure:
     """
     Plot a bar graph of emissions by category for each scenario
 
@@ -193,9 +198,7 @@ def plot_emissions(df: pd.DataFrame, title_suffix:str=None, net_emissions=True) 
 
     font_size = 22
 
-    cmap = mpl.colormaps['tab20']
-    colors = cmap.colors[0::2]+cmap.colors[1::2]
-    colors = [colors[i%len(colors)] for i in range(len(df.columns))][::-1]
+    colors = get_distinct_colors(len(df.columns))
 
     fig, ax = plt.subplots()
 
@@ -236,6 +239,50 @@ def plot_emissions(df: pd.DataFrame, title_suffix:str=None, net_emissions=True) 
     fig.tight_layout()
 
     return fig
+
+def plot_cost_cobenefits(df: pd.DataFrame, title_suffix: str = None) -> plt.Figure:
+    """
+    Plot a high-quality bar graph of cost co-benefits for each scenario.
+
+    :param df: A multi-index dataframe with 'Outcomes (YYYY-YYYY)' in its columns.
+    :param title_suffix: Optional string to append to the plot title.
+    :return: A matplotlib Figure
+    """
+    import matplotlib.ticker as mtick
+
+    # Extract the time span prefix
+    tspan = [col[0] for col in df.columns if col[1] == 'Cost co-benefits'][0]
+    data = df[(tspan, 'Cost co-benefits')].copy().dropna()
+
+    # Sort for readability
+    data = data.sort_values(ascending=False)
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(max(10, len(data) * 1.3), 7))
+    bars = ax.bar(data.index.get_level_values(0), data.values, color="#66c2a5")
+
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.annotate(f'${height:,.0f}', 
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 6),  # 6 pts above bar
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontsize=10)
+
+    # Format axes and title
+    ax.set_title("Cost Co-Benefits" + (f" {title_suffix}" if title_suffix else ""), fontsize=18, weight='bold')
+    ax.set_ylabel("Cost Co-Benefits (USD)", fontsize=14)
+    ax.set_xlabel("Scenario", fontsize=14)
+    ax.set_xticks(range(len(data)))
+    ax.set_xticklabels(data.index.get_level_values(0), rotation=45, ha='right', fontsize=11)
+    ax.yaxis.set_major_formatter(mtick.StrMethodFormatter('${x:,.0f}'))
+
+    ax.grid(True, axis='y', linestyle='--', alpha=0.7)
+    fig.tight_layout()
+
+    return fig
+
 
 
 def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
@@ -285,15 +332,23 @@ def save_scenario_outputs(df, prefix: str, title_suffix: str = None):
     fig.savefig(file_name, dpi=300)
     plt.close(fig)
     print(f'Total emissions bar plots saved: {file_name}')
+    
+    # Cost co-benefits plot
+    fig = plot_cost_cobenefits(df, title_suffix)
+    file_name = f'figs/{prefix}_Cost_CoBenefits_{facility_code}.png'
+    fig.savefig(file_name, dpi=300)
+    plt.close(fig)
+    print(f'Cost co-benefits bar plots saved: {file_name}')
+
 
     # Emissions spreadsheet
     file_name = f'results/{prefix}_Emissions_{facility_code}.xlsx'
     emissions.to_excel(file_name, sheet_name=facility_code)
     print(f'Emissions spreadsheet saved: {file_name}')
 
-    df.index.name='Scenario'
+    df.index.name = 'Scenario'
     df['Facility'] = facility_code
-    df = df.set_index('Facility',append=True)
+    df = df.set_index('Facility', append=True)
     save_formatted_results(df, f'results/{prefix}_{facility_code}.xlsx')
     return df
 
@@ -303,7 +358,7 @@ def powerset(set):
     Return all combinations of length 0-n
 
     For example, given the collection [1,2,3] this function would return
-    [],[1],[2],[3],[1,2],[1,3],[2,3],[1,2,3]
+    [], [1], [2], [3], [1,2], [1,3], [2,3], [1,2,3]
 
     :param set: Iterable of items (set, list)
     :return: Generator of all combinations
@@ -323,3 +378,4 @@ def is_forbidden_combination(combo, forbidden=None):
             if len(f & set(combo)) > 1:
                 return True
     return False
+
