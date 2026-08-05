@@ -7,10 +7,10 @@ from books import generate_books
 
 ## Time frame of simulation
 start_year = 2024 # MODIFY AS NEEDED
-end_year = start_year + 5 # MODIFY AS NEEDED
+end_year = start_year + 1 # MODIFY AS NEEDED
 
 # Input data sheet file name (and path if applicable) and read facility code name
-input_data_sheet = 'input_data_example.xlsx' # MODIFY AS NEEDED
+input_data_sheet = 'mt_darwin_24_06_25.xlsx' # MODIFY AS NEEDED
 facility_code = pd.read_excel(input_data_sheet, sheet_name='facility', index_col='Code Name').index[0]
 
 # Generate framework, databook and progbook and return facility code name
@@ -27,4 +27,41 @@ P.settings.sim_start = start_year # simulation start year
 P.settings.sim_end   = end_year # simulation end year
 
 # Load program and define variables for program runs
-progset = P.load_progbook('books/carbomica_progbook_{}.xlsx'.format(facility_code))
+P.load_progbook('books/carbomica_progbook_{}.xlsx'.format(facility_code))
+
+# Load co-benefits
+cobenefits = pd.read_excel(input_data_sheet, sheet_name='interventions', index_col='Code Name').reindex(['Additional annual CO2 reduction','Cost co-benefits','Other co-benefits'], axis=1)
+cobenefits['Additional annual CO2 reduction'] = cobenefits['Additional annual CO2 reduction'].fillna(0)
+cobenefits['Cost co-benefits'] = cobenefits['Cost co-benefits'].fillna(0)
+
+# Load exclusions
+try:
+    exclusions = pd.read_excel(input_data_sheet, sheet_name='exclusions', header=None)
+    
+    if exclusions.empty:
+        exclusions = None  # No exclusions to apply if the sheet is empty
+    else:
+        exclusions = [{x for x in row if not pd.isna(x)} for _, row in exclusions.iterrows()]
+
+except ValueError:
+    exclusions = None  # Handle error by setting exclusions to None
+
+def can_coexist(intervention_set, exclusions):
+    if exclusions is None:
+        # Allow all interventions to coexist if exclusions is None
+        return True
+    
+    for exclusion_set in exclusions:
+        if intervention_set.issubset(exclusion_set):
+            # If the intervention set is a subset of any exclusion set, they cannot coexist
+            return False
+    
+    # If no exclusion set prevents coexistence, allow it
+    return True
+
+# Logic to check coexistence of interventions should call can_coexist function as needed.
+
+
+
+# Extract emissions parameters
+emissions_pars = list(pd.read_excel(input_data_sheet, sheet_name='emission sources', index_col='Code Name').index)

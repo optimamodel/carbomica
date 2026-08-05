@@ -1,5 +1,5 @@
 import atomica as at
-from project import P, progset, start_year
+from project import P, start_year
 import os
 if not os.path.exists('results'): os.makedirs('results')
 if not os.path.exists('figs'): os.makedirs('figs')
@@ -11,6 +11,7 @@ E.g.: It can be useful to set intervention effects to 0 (perfect effect), the sa
 
 # Run a budget scenario and verify that outputs make sense
 investment = 1e5  # set investment
+progset = P.progsets[0]
 
 # Scale up each prog to see impact
 for prog in progset.programs.keys():
